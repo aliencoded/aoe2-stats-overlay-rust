@@ -5,6 +5,8 @@
 
 In-game overlay for **Age of Empires II: Definitive Edition**. Shows your opponent's rating, top civs, and last 5 matches — right on top of the game, while you play.
 
+![Hero](docs/screenshots/hero.webp)
+
 Project page: https://www.thinkingslightly.com/aoe2-opponent-stats-ui-overlay/
 
 ## Download
@@ -13,6 +15,12 @@ Project page: https://www.thinkingslightly.com/aoe2-opponent-stats-ui-overlay/
 - [NSIS / MSI installers](https://github.com/aliencoded/aoe2-stats-overlay-rust/releases/latest)
 
 Windows 10/11. Steam version of AoE2DE. SmartScreen will warn — click **More info → Run anyway** (not signed; codesign certs are ~$200/yr).
+
+## Screenshots
+
+| Full mode | Pill mode |
+|---|---|
+| ![Full](docs/screenshots/full-card.webp) | ![Pill](docs/screenshots/pill-mode.webp) |
 
 ## What you get
 
