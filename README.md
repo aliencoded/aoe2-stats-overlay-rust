@@ -11,8 +11,10 @@ Project page: https://www.thinkingslightly.com/aoe2-opponent-stats-ui-overlay/
 
 ## Download
 
-- **[Portable .exe](https://github.com/aliencoded/aoe2-stats-overlay-rust/releases/latest/download/aoe2-stats-overlay.exe)** (~6 MB, no install)
-- [NSIS / MSI installers](https://github.com/aliencoded/aoe2-stats-overlay-rust/releases/latest)
+- **[Portable .exe](https://github.com/aliencoded/aoe2-stats-overlay-rust/releases/latest/download/aoe2-stats-overlay.exe)** — ~6 MB, no install, just run
+- [NSIS installer (.exe)](https://github.com/aliencoded/aoe2-stats-overlay-rust/releases/latest/download/aoe2-stats-overlay_0.1.0_x64-setup.exe) — Start Menu shortcut + uninstall entry
+- [MSI installer](https://github.com/aliencoded/aoe2-stats-overlay-rust/releases/latest/download/aoe2-stats-overlay_0.1.0_x64_en-US.msi) — silent install / enterprise
+- [All releases](https://github.com/aliencoded/aoe2-stats-overlay-rust/releases)
 
 Windows 10/11. Steam version of AoE2DE. SmartScreen will warn — click **More info → Run anyway** (not signed; codesign certs are ~$200/yr).
 
