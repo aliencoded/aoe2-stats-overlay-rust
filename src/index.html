@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>AoE2 Stats Overlay</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="bar">
+      <span class="title">AoE2 Stats</span>
+      <span id="status" class="status">…</span>
+      <button id="refresh" title="Ctrl+Shift+R">↻</button>
+      <button id="collapse" title="Collapse to pill">⤡</button>
+      <button id="expand" title="Expand to full">⤢</button>
+      <button id="help" title="Help, hotkeys, log location">?</button>
+      <button id="quit" title="Quit">×</button>
+    </header>
+    <div id="players"></div>
+    <footer class="attrib">
+      Data:
+      <a href="https://www.aoe2companion.com/" target="_blank" rel="noopener noreferrer">aoe2companion.com</a>
+      · <a href="https://www.linkedin.com/in/aliencoded/" target="_blank" rel="noopener noreferrer">contact dev</a>
+      · <span id="appVersion" class="appver">v-</span>
+    </footer>
+    <footer class="hint">Ctrl+Shift+S hide · Ctrl+Shift+R refresh · Ctrl+Shift+C click-through</footer>
+  </div>
+
+  <div id="helpModal" class="help-modal" hidden>
+    <div class="help-card">
+      <button id="helpClose" class="help-close" aria-label="Close">×</button>
+      <h2>AoE2 Opponent Stats Overlay</h2>
+      <p class="help-version"><span id="helpVersion">v-</span> · MIT licensed</p>
+
+      <h3>Hotkeys</h3>
+      <ul class="help-keys">
+        <li><kbd>Ctrl+Shift+S</kbd> Toggle full ↔ pill</li>
+        <li><kbd>Ctrl+Shift+R</kbd> Force refresh (clears cache)</li>
+        <li><kbd>Ctrl+Shift+C</kbd> Toggle click-through (lets clicks pass to game)</li>
+      </ul>
+
+      <h3>Log file</h3>
+      <p class="help-log">For bug reports, grab the log file and attach it.</p>
+      <button id="helpOpenLog" class="help-btn">Open log folder</button>
+
+      <h3>Links</h3>
+      <ul class="help-links">
+        <li><a href="https://www.thinkingslightly.com/aoe2-opponent-stats-ui-overlay/" target="_blank" rel="noopener noreferrer">Project page</a></li>
+        <li><a href="https://github.com/aliencoded/aoe2-stats-mod" target="_blank" rel="noopener noreferrer">Source on GitHub</a>. MIT licensed</li>
+        <li><a href="https://www.linkedin.com/in/aliencoded/" target="_blank" rel="noopener noreferrer">Contact developer</a></li>
+      </ul>
+
+      <h3>Common issues</h3>
+      <ul class="help-issues">
+        <li><strong>Stats took a while to show?</strong> Companion API indexing takes 10–30s after a match starts.</li>
+        <li><strong>Overlay won't respond to clicks?</strong> Click-through is on. Press Ctrl+Shift+C.</li>
+        <li><strong>Wrong Steam account?</strong> Restart the overlay after switching accounts.</li>
+      </ul>
+    </div>
+  </div>
+  <script src="main.js"></script>
+</body>
+</html>

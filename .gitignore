@@ -1,0 +1,30 @@
+# Rust
+debug/
+target/
+**/*.rs.bk
+*.pdb
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Logs / build artifacts
+*.log
+build.log
+dev.log
+
+# Local helper scripts (machine-specific, vcvars paths)
+*.bat
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE (uncomment to ignore)
+#.idea/
+#.vscode/
+
+# Local notes (Claude context, not for repo)
+CLAUDE.md
