@@ -35,13 +35,13 @@ window.api = {
 
 // --- Display settings (what's shown per mode) ---
 const SETTING_SECTIONS = [
-  { key: 'rating',          label: 'Rating (1v1 + TG)' },
-  { key: 'threat',          label: 'Scout summary (smurf + likely openings)' },
-  { key: 'formatBreakdown', label: 'ELO + Civ breakdown by format' },
-  { key: 'activity',        label: 'Activity (games today / week)' },
-  { key: 'lastMatches',     label: 'Recent matches list (any format)' },
-  { key: 'profileLink',     label: 'Profile link (companion)' },
-  { key: 'selfBar',         label: 'Your own stats bar' },
+  { key: 'rating',          labelKey: 'setting_rating' },
+  { key: 'threat',          labelKey: 'setting_threat' },
+  { key: 'formatBreakdown', labelKey: 'setting_format' },
+  { key: 'activity',        labelKey: 'setting_activity' },
+  { key: 'lastMatches',     labelKey: 'setting_last_matches' },
+  { key: 'profileLink',     labelKey: 'setting_profile_link' },
+  { key: 'selfBar',         labelKey: 'setting_self_bar' },
 ];
 const DEFAULT_SETTINGS = {
   full:    { rating: true, threat: true, formatBreakdown: true, activity: true, lastMatches: true,  profileLink: true,  selfBar: true },
@@ -125,9 +125,9 @@ function renderSelfBar(s) {
   const r1 = s.rank1v1 || {}, rt = s.rankTG || {};
   return `
     <div class="selfbar">
-      <span class="me">YOU</span>
+      <span class="me">${t('you')}</span>
       <span class="nm">${escapeHtml(s.name)}</span>
-      ${s.civ ? `<span class="g">[${escapeHtml(s.civ)}]</span>` : ''}
+      ${s.civ ? `<span class="g">[${escapeHtml(localizeCiv(s.civ))}]</span>` : ''}
       <span class="r">1v1 ${r1.rating ?? '—'}${r1.rank ? `#${r1.rank}` : ''}</span>
       <span class="r">TG ${rt.rating ?? '—'}${rt.rank ? `#${rt.rank}` : ''}</span>
       ${selfProfileLinks(s)}
@@ -138,7 +138,7 @@ function selfProfileLinks(s) {
   const c = s.profileId;
   if (!c) return '';
   return `<span class="profile-links inline">
-    <a href="https://www.aoe2companion.com/players/${encodeURIComponent(c)}" target="_blank" rel="noopener noreferrer">view on companion</a>
+    <a href="https://www.aoe2companion.com/players/${encodeURIComponent(c)}" target="_blank" rel="noopener noreferrer">${t('view_on_companion')}</a>
   </span>`;
 }
 
@@ -455,23 +455,22 @@ function detectSession(p) {
   const gapHrs = beforeSession ? (last - beforeSession) / 3600000 : null;
 
   if (sinceMin > 30 && sinceMin < 120) {
-    return { label: `warming up · last game ${Math.round(sinceMin)}min ago`, kind: 'fresh' };
+    return { label: t('warming_up', { min: Math.round(sinceMin) }), kind: 'fresh' };
   }
   if (gapHrs != null && gapHrs >= 24 && sessionGames <= 2) {
-    const days = Math.round(gapHrs / 24);
-    return { label: `fresh session · back after ${days}d`, kind: 'fresh' };
+    return { label: t('fresh_break', { days: Math.round(gapHrs / 24) }), kind: 'fresh' };
   }
   if (gapHrs != null && gapHrs >= 6 && sessionGames <= 2) {
-    return { label: `fresh session · first games today`, kind: 'fresh' };
+    return { label: t('fresh_today'), kind: 'fresh' };
   }
   if (sessionGames >= 8) {
-    return { label: `deep grind · ${sessionGames} games this session`, kind: 'tired' };
+    return { label: t('deep_grind', { n: sessionGames }), kind: 'tired' };
   }
   if (sessionGames >= 4) {
-    return { label: `${sessionGames}-game session in progress`, kind: 'warm' };
+    return { label: t('session_in_progress', { n: sessionGames }), kind: 'warm' };
   }
   if (gamesToday >= 1) {
-    return { label: `${gamesToday} game${gamesToday>1?'s':''} today`, kind: 'warm' };
+    return { label: t(gamesToday > 1 ? 'games_today' : 'game_today', { n: gamesToday }), kind: 'warm' };
   }
   return null;
 }
@@ -485,24 +484,25 @@ function renderThreatSection(p) {
   const hasData = (p.matches || []).length > 0 || p.rank1v1 || p.rankTG;
   if (!hasData && !cheeses.length) {
     return `
-      <div class="sect">Scout summary <span class="sect-sub-note">· smurf signals + likely openings</span></div>
-      <div class="sect-empty">no data yet</div>
+      <div class="sect">${t('scout_summary')} <span class="sect-sub-note">· ${t('scout_sub')}</span></div>
+      <div class="sect-empty">${t('no_data')}</div>
     `;
   }
   const smurfTag = smurf && smurf.pct > 0
-    ? `<span class="threat-tag smurf-${smurf.level}" title="${escapeHtml(smurf.reasons.join(' · '))}">${smurf.pct >= 30 ? '⚠' : '✓'} smurf probability: ${smurf.pct}%</span>`
+    ? `<span class="threat-tag smurf-${smurf.level}" title="${escapeHtml(smurf.reasons.join(' · '))}">${smurf.pct >= 30 ? '⚠' : '✓'} ${t('smurf_prob')}: ${smurf.pct}%</span>`
     : (smurf
-        ? `<span class="threat-tag smurf-none" title="ELO trend, games count, recent WR all normal">✓ smurfing activity not detected</span>`
+        ? `<span class="threat-tag smurf-none" title="${escapeHtml(t('tip_smurf_none'))}">✓ ${t('smurf_none')}</span>`
         : '');
   const sessionTag = session
     ? `<span class="threat-tag session-${session.kind}">${escapeHtml(session.label)}</span>`
     : '';
+  const phaseLabel = fav ? t(`${fav.phase}_player`) : '';
   const phaseTag = fav
-    ? `<span class="threat-tag phase-${fav.phase}" title="based on most-played civ: ${escapeHtml(fav.civ)} (${fav.games}g)">${fav.phase}-game player</span>`
+    ? `<span class="threat-tag phase-${fav.phase}" title="${escapeHtml(t('tip_phase', { civ: localizeCiv(fav.civ), n: fav.games }))}">${phaseLabel}</span>`
     : '';
   const drops = (p.rank1v1 && p.rank1v1.drops) || (p.rankTG && p.rankTG.drops) || 0;
   const dropTag = drops > 0
-    ? `<span class="threat-tag drops-tag" title="Companion-reported drops/disconnects">${drops} drops</span>`
+    ? `<span class="threat-tag drops-tag" title="${escapeHtml(t('tip_drops'))}">${t('drops', { n: drops })}</span>`
     : '';
   const sevPct = { high: 65, med: 40, low: 22 };
   const matches = p.matches || [];
@@ -536,16 +536,16 @@ function renderThreatSection(p) {
   }
 
   const famNote = civPlayCount === 0
-    ? `${civ || 'civ'}: first pick in recent history`
+    ? `${localizeCiv(civ) || 'civ'}: first pick in recent history`
     : `${civPlayCount} games this civ${civWR != null ? ` · ${Math.round(civWR*100)}% WR` : ''}`;
   const tagNote = [famNote, durNote].filter(Boolean).join(' · ');
   const cheeseTags = cheeses.map(c => {
     const base = sevPct[c.sev] ?? 30;
     const pct = Math.max(5, Math.min(95, Math.round(base * famMult * wrMult * durMult)));
-    return `<span class="threat-tag cheese-${c.sev}" title="${escapeHtml(tagNote)}">${escapeHtml(c.name)} ${pct}%</span>`;
+    return `<span class="threat-tag cheese-${c.sev}" title="${escapeHtml(tagNote || t('tip_opening'))}">${escapeHtml(c.name)} ${pct}%</span>`;
   }).join('');
   return `
-    <div class="sect">Scout summary <span class="sect-sub-note">· smurf signals + likely openings</span></div>
+    <div class="sect">${t('scout_summary')} <span class="sect-sub-note">· ${t('scout_sub')}</span></div>
     <div class="threat-line">${smurfTag}${sessionTag}${phaseTag}${dropTag}${cheeseTags}</div>
   `;
 }
@@ -554,13 +554,13 @@ function renderEloRow(label, st, isCurrent, rank) {
   // Empty bucket — show placeholder with career rank if available.
   if (!st) {
     const careerStr = rank
-      ? `<span class="g">career</span> ${rank.games ?? '?'}g · ${rank.winrate ?? '?'}%`
+      ? `<span class="g">${t('career_short')}</span> ${rank.games ?? '?'}g · ${rank.winrate ?? '?'}%`
       : '';
     return `
       <div class="fmt ${isCurrent ? 'fmt-current' : ''} fmt-empty">
         <div class="fmt-row">
           <span class="fmt-label">${escapeHtml(label)}</span>
-          <span class="fmt-empty-note g">no recent games in window</span>
+          <span class="fmt-empty-note g">${t('no_games_window')}</span>
           ${careerStr}
         </div>
       </div>`;
@@ -571,12 +571,12 @@ function renderEloRow(label, st, isCurrent, rank) {
     '<span class="wl">·</span>'
   ).join('');
   const trendStr = (st.trendSeries && st.trendSeries.length >= 2)
-    ? `<span class="trend-block"><span class="g">Trend</span> ${sparkline(st.trendSeries)} ${st.trend != null ? `<span class="trend ${st.trend > 0 ? 'trend-up' : st.trend < 0 ? 'trend-down' : 'trend-flat'}" title="Net ELO change over last 5 games">${st.trend > 0 ? '+' : ''}${st.trend}</span>` : ''}</span>`
+    ? `<span class="trend-block"><span class="g">${t('trend')}</span> ${sparkline(st.trendSeries)} ${st.trend != null ? `<span class="trend ${st.trend > 0 ? 'trend-up' : st.trend < 0 ? 'trend-down' : 'trend-flat'}" title="${escapeHtml(t('tip_net_elo'))}">${st.trend > 0 ? '+' : ''}${st.trend}</span>` : ''}</span>`
     : '';
   const rangeStr = (st.ratingMin != null && st.ratingMax != null)
-    ? `<span class="g">range</span> ${st.ratingMin}–${st.ratingMax}` : '';
+    ? `<span class="g">${t('range')}</span> ${st.ratingMin}–${st.ratingMax}` : '';
   const mapStr = (st.mapStats && currentMatchMap)
-    ? `<span class="g">on ${escapeHtml(currentMatchMap)}:</span> <strong>${st.mapStats.wins}W-${st.mapStats.games - st.mapStats.wins}L</strong>` : '';
+    ? `<span class="g">${t('on_map', { map: escapeHtml(currentMatchMap) })}</span> <strong>${st.mapStats.wins}W-${st.mapStats.games - st.mapStats.wins}L</strong>` : '';
   let streakBadge = '';
   if (rank && rank.streak != null) {
     const n = Number(rank.streak);
@@ -585,7 +585,7 @@ function renderEloRow(label, st, isCurrent, rank) {
     streakBadge = `<span class="streak-badge ${cls}">${sign}</span>`;
   }
   const careerStr = rank
-    ? `<span class="career-block"><span class="g">Career</span> <strong>${(rank.games ?? '?').toLocaleString()}</strong> games · <strong>${rank.winrate ?? '?'}%</strong> WR</span>`
+    ? `<span class="career-block"><span class="g">${t('career_full')}</span> <strong>${(rank.games ?? '?').toLocaleString()}</strong> ${t('games_short')} · <strong>${rank.winrate ?? '?'}%</strong> ${t('wr_short')}</span>`
     : '';
   return `
     <div class="fmt ${isCurrent ? 'fmt-current' : ''}">
@@ -594,12 +594,12 @@ function renderEloRow(label, st, isCurrent, rank) {
         ${careerStr}
       </div>
       <div class="fmt-row">
-        <span class="fmt-window-count g" title="Of the last 40 fetched matches">last ${st.games}: <strong>${st.wr}%</strong> WR (${st.wins}W-${st.games - st.wins}L)</span>
+        <span class="fmt-window-count g" title="${escapeHtml(t('tip_window40'))}">${t('last_n', { n: st.games })} <strong>${st.wr}%</strong> ${t('wr_short')} (${st.wins}W-${st.games - st.wins}L)</span>
         ${trendStr}
       </div>
       <div class="fmt-row fmt-sub">
         ${rangeStr}
-        ${(streakBadge || wlSeq) ? `<span class="g">recent</span> ${streakBadge} <span class="fmt-wl">${wlSeq}</span>` : ''}
+        ${(streakBadge || wlSeq) ? `<span class="g">${t('recent_short')}</span> ${streakBadge} <span class="fmt-wl">${wlSeq}</span>` : ''}
         ${mapStr}
       </div>
     </div>`;
@@ -611,7 +611,7 @@ function renderCivRow(label, st, isCurrent, selfCiv) {
       <div class="fmt ${isCurrent ? 'fmt-current' : ''} fmt-empty">
         <div class="fmt-row">
           <span class="fmt-label">${escapeHtml(label)}</span>
-          <span class="fmt-empty-note g">no recent games to analyze civs</span>
+          <span class="fmt-empty-note g">${t('no_games_civs')}</span>
         </div>
       </div>`;
   }
@@ -621,20 +621,20 @@ function renderCivRow(label, st, isCurrent, selfCiv) {
   // Tendency classification.
   let tendencyTag;
   if (!totalCivGames) {
-    tendencyTag = `<span class="civ-tend tend-none">no civ data</span>`;
+    tendencyTag = `<span class="civ-tend tend-none">${t('no_civ_data')}</span>`;
   } else if (topShare >= 0.40) {
-    tendencyTag = `<span class="civ-tend tend-strong">most-played ${escapeHtml(titleCase(st.topCiv[0]))} (${Math.round(topShare*100)}%)</span>`;
+    tendencyTag = `<span class="civ-tend tend-strong">${t('most_played')} ${escapeHtml(localizeCiv(st.topCiv[0]))} (${Math.round(topShare*100)}%)</span>`;
   } else if (topShare >= 0.25) {
-    tendencyTag = `<span class="civ-tend tend-lean">most-played ${escapeHtml(titleCase(st.topCiv[0]))} (${Math.round(topShare*100)}%)</span>`;
+    tendencyTag = `<span class="civ-tend tend-lean">${t('most_played')} ${escapeHtml(localizeCiv(st.topCiv[0]))} (${Math.round(topShare*100)}%)</span>`;
   } else {
-    tendencyTag = `<span class="civ-tend tend-flex">flex picker · no strong civ preference</span>`;
+    tendencyTag = `<span class="civ-tend tend-flex">${t('flex_picker')}</span>`;
   }
   const bestStr = st.bestCiv
-    ? `<span class="civ-tend tend-best">highest WR ${escapeHtml(titleCase(st.bestCiv.civ))} ${st.bestCiv.wr}% (${st.bestCiv.games}g)</span>`
+    ? `<span class="civ-tend tend-best">${t('highest_wr')} ${escapeHtml(localizeCiv(st.bestCiv.civ))} ${st.bestCiv.wr}% (${st.bestCiv.games}g)</span>`
     : '';
   const poolStr = '';
   const mirror = selfCiv && st.topCiv && st.topCiv[0].toLowerCase() === selfCiv.toLowerCase()
-    ? `<span class="mirror-alert">⚠ mirrors your ${escapeHtml(titleCase(selfCiv))}</span>` : '';
+    ? `<span class="mirror-alert">${t('mirror_alert', { civ: escapeHtml(localizeCiv(selfCiv)) })}</span>` : '';
 
   // SVG pie chart of civ distribution (top 5 + "others").
   let chart = '';
@@ -642,7 +642,7 @@ function renderCivRow(label, st, isCurrent, selfCiv) {
     const palette = ['#e57373', '#64b5f6', '#81c784', '#ffb74d', '#ba68c8'];
     const shown = topCivs.slice(0, 5);
     const shownGames = shown.reduce((a, c) => a + (c.games || 0), 0) || 1;
-    const slices = shown.map((c, i) => ({ name: titleCase(c.civ), games: c.games, wr: c.wr, color: palette[i] }));
+    const slices = shown.map((c, i) => ({ name: localizeCiv(c.civ), games: c.games, wr: c.wr, color: palette[i] }));
 
     const cx = 32, cy = 32, r = 30;
     let acc = 0;
@@ -750,11 +750,11 @@ function cardHtml(p, isAlly) {
     const when = m.started ? relTime(m.started) : '';
     const fmt = leaderboardShort(m.leaderboard);
     const fmtCls = fmt.startsWith('1v1') ? 'fmt-tag-1v1' : fmt.startsWith('TG') ? 'fmt-tag-tg' : 'fmt-tag-other';
-    return `<div class="civ"><span><span class="wl ${cls}">${wl}</span> <span class="fmt-tag ${fmtCls}">${escapeHtml(fmt)}</span> ${escapeHtml(titleCase(m.civ) || '?')}</span><span class="g">${escapeHtml(m.map || '')} ${diff}${when ? ` · ${when}` : ''}</span></div>`;
-  }).join('') || `<div class="civ">${loading ? placeholder('loading…') : placeholder('no recent matches')}</div>`;
+    return `<div class="civ"><span><span class="wl ${cls}">${wl}</span> <span class="fmt-tag ${fmtCls}">${escapeHtml(fmt)}</span> ${escapeHtml(localizeCiv(m.civ) || '?')}</span><span class="g">${escapeHtml(m.map || '')} ${diff}${when ? ` · ${when}` : ''}</span></div>`;
+  }).join('') || `<div class="civ">${loading ? placeholder(t('loading')) : placeholder(t('no_recent_matches'))}</div>`;
 
   const roleCls = isAlly ? 'ally' : 'opp';
-  const roleLabel = isAlly ? 'ALLY' : 'OPP';
+  const roleLabel = isAlly ? t('role_ally') : t('role_opp');
   const loadCls = loading ? ' card-loading' : '';
   const showRating = S('rating');
   const showActivity = S('activity') && (p.games24h != null || p.games7d != null);
@@ -765,7 +765,7 @@ function cardHtml(p, isAlly) {
   const showProfileLink = S('profileLink');
 
   const activityStr = showActivity
-    ? `<span><span class="g">Activity:</span> ${p.games24h ?? 0} today · ${p.games7d ?? 0} this week</span>`
+    ? `<span><span class="g">${t('activity_label')}</span> ${t(p.games24h === 1 ? 'game_today' : 'games_today', { n: p.games24h ?? 0 })} · ${p.games7d ?? 0}/7d</span>`
     : '';
 
   // Build per-format buckets once, reused for ELO + Civ sections.
@@ -775,7 +775,7 @@ function cardHtml(p, isAlly) {
 
   return `
     <div class="card card-${roleCls}${loadCls}" id="${playerKey(p)}">
-      <div class="name"><span class="role ${roleCls}">${roleLabel}</span> ${escapeHtml(p.name)} ${p.civ ? `<span class="g">[${escapeHtml(p.civ)}]</span>` : ''}</div>
+      <div class="name"><span class="role ${roleCls}">${roleLabel}</span> ${escapeHtml(p.name)} ${p.civ ? `<span class="g">[${escapeHtml(localizeCiv(p.civ))}]</span>` : ''}</div>
       ${showRating ? `<div class="ratings">
         <span><span class="lbl">1v1</span>${r1.rating ?? (loading ? '…' : '—')}${r1.rank ? ` (#${r1.rank})` : ''}</span>
         <span><span class="lbl">TG</span>${rt.rating ?? (loading ? '…' : '—')}${rt.rank ? ` (#${rt.rank})` : ''}</span>
@@ -784,24 +784,24 @@ function cardHtml(p, isAlly) {
       ${threatHtml}
 
       ${showFormatBreakdown ? (fmtBuckets.length ? `
-        <div class="sect">ELO performance <span class="sect-sub-note">· from last 40 fetched matches</span></div>
+        <div class="sect">${t('elo_perf')} <span class="sect-sub-note">· ${t('elo_sub')}</span></div>
         <div class="fmt-list">${fmtBuckets.map(b => renderEloRow(b.label, b.stats, b.isCurrent, b.rank)).join('')}</div>
 
-        <div class="sect">Top 5 civ tendencies <span class="sect-sub-note">· from last 40 fetched matches</span></div>
+        <div class="sect">${t('civ_tend')} <span class="sect-sub-note">· ${t('elo_sub')}</span></div>
         <div class="fmt-list">${fmtBuckets.map(b => renderCivRow(b.label, b.stats, b.isCurrent, currentMatchSelfCiv)).join('')}</div>
       ` : `
-        <div class="sect">ELO performance</div>
-        <div class="sect-empty">${loading ? 'loading…' : 'no recent matches fetched'}</div>
-        <div class="sect">Top 5 civ tendencies</div>
-        <div class="sect-empty">${loading ? 'loading…' : 'no recent matches to analyze'}</div>
+        <div class="sect">${t('elo_perf')}</div>
+        <div class="sect-empty">${loading ? t('loading') : t('no_matches_fetched')}</div>
+        <div class="sect">${t('civ_tend')}</div>
+        <div class="sect-empty">${loading ? t('loading') : t('no_matches_analyze')}</div>
       `) : ''}
 
       ${(showActivity || showLastMatches || showProfileLink) ? `
-        <div class="sect">Activity (any format)</div>
+        <div class="sect">${t('activity_section')}</div>
         ${(activityStr || (showLastMatches && (p.matches || []).length))
           ? `<div class="activity-line">${activityStr}${dropsStr}</div>
-             ${showLastMatches && (p.matches || []).length ? `<div class="sect-sub">Recent matches</div><div class="civs">${lastCivs}</div>` : ''}`
-          : `<div class="sect-empty">no recent activity</div>`}
+             ${showLastMatches && (p.matches || []).length ? `<div class="sect-sub">${t('recent_matches')}</div><div class="civs">${lastCivs}</div>` : ''}`
+          : `<div class="sect-empty">${t('no_activity')}</div>`}
       ` : ''}
 
       ${showProfileLink ? profileLinks(p) : ''}
@@ -813,7 +813,7 @@ function profileLinks(p) {
   const c = p.profileId;
   if (!c) return '';
   return `<div class="profile-links">
-    <a href="https://www.aoe2companion.com/players/${encodeURIComponent(c)}" target="_blank" rel="noopener noreferrer">view on companion</a>
+    <a href="https://www.aoe2companion.com/players/${encodeURIComponent(c)}" target="_blank" rel="noopener noreferrer">${t('view_on_companion')}</a>
   </div>`;
 }
 
@@ -836,7 +836,7 @@ function renderPlayers(snap) {
     if (first?.leaderboard) { currentMatchFormat = leaderboardShort(first.leaderboard); break; }
   }
 
-  if (!opponents.length) { renderEmpty('No opponents parsed.'); return; }
+  if (!opponents.length) { renderEmpty(t('empty_no_opps')); return; }
 
   const selfTeam = self?.team || null;
   const selfHtml = renderSelfBar(self);
@@ -897,21 +897,21 @@ async function refresh() {
     if (!steamId) {
       const r = await window.api.getSteamId();
       if (typeof r === 'string') steamId = r;
-      else { setStatus(`steam: ${r.error}`); return null; }
+      else { setStatus(t('status_steam_err', { err: r.error })); return null; }
     }
-    setStatus('fetching…');
+    setStatus(t('status_fetching'));
     const snap = await window.api.fetchMatch(steamId);
-    if (snap.error) { setStatus(`err: ${snap.error}`); return null; }
+    if (snap.error) { setStatus(t('status_err', { err: snap.error })); return null; }
     if (!snap.players || !snap.players.length) {
-      setStatus(snap.reason || 'no match');
-      renderEmpty('No recent match. Queue up and stats will appear.');
+      setStatus(snap.reason || t('status_no_match'));
+      renderEmpty(t('empty_no_match'));
       currentSnap = snap;
       return snap;
     }
     const when = snap.fetchedAt ? new Date(snap.fetchedAt).toLocaleTimeString() : '';
     const tag = snap.cached ? 'cached' : 'fresh';
     const live = snap.inMatch ? 'LIVE' : 'LAST';
-    setStatus(`${live} · ${tag} ${when}`);
+    setStatus(`${snap.inMatch ? t('live') : t('last')} · ${snap.cached ? t('cached') : t('fresh')} ${when}`);
     document.body.classList.toggle('last-match', !snap.inMatch);
     updatePostMatchCard(snap);
     if (!snap.cached) renderPlayers(snap);
@@ -934,7 +934,7 @@ window.api.onMatchPartial((partial) => {
       pseudoId: partial.pseudoId,
     };
     renderPlayers(currentSnap);
-    setStatus(`${partial.inMatch ? 'LIVE' : 'LAST'} · loading…`);
+    setStatus(`${partial.inMatch ? t('live') : t('last')} · ${t('loading')}`);
   } else if (partial.stage === 'player') {
     if (currentSnap) {
       const idx = (currentSnap.players || []).findIndex(p =>
@@ -969,11 +969,11 @@ function updatePostMatchCard(snap) {
   const self = getSelf(snap);
   if (selfLink && selfWrap && self?.profileId && snap.matchId) {
     selfLink.href = `https://www.aoe2companion.com/matches/${encodeURIComponent(snap.matchId)}`;
-    selfLink.textContent = 'View this match';
+    selfLink.textContent = t('view_match');
     selfWrap.removeAttribute('hidden');
   } else if (selfLink && selfWrap && self?.profileId) {
     selfLink.href = `https://www.aoe2companion.com/players/${encodeURIComponent(self.profileId)}`;
-    selfLink.textContent = 'View your profile';
+    selfLink.textContent = t('view_profile');
     selfWrap.removeAttribute('hidden');
   } else if (selfWrap) {
     selfWrap.setAttribute('hidden', '');
@@ -1091,7 +1091,7 @@ window.api.onRefresh(refresh);
   function renderTable() {
     body.innerHTML = SETTING_SECTIONS.map(s => `
       <tr>
-        <td>${s.label}</td>
+        <td>${t(s.labelKey)}</td>
         <td><input type="checkbox" data-mode="full" data-key="${s.key}" ${settings.full[s.key] ? 'checked' : ''}></td>
         <td><input type="checkbox" data-mode="compact" data-key="${s.key}" ${settings.compact[s.key] ? 'checked' : ''}></td>
       </tr>
@@ -1099,6 +1099,38 @@ window.api.onRefresh(refresh);
     document.querySelectorAll('input[data-other="postMatchCard"]').forEach(el => {
       el.checked = !!settings.postMatchCard;
     });
+    // Apply translated labels every time the modal opens (so it reflects
+    // current language even after a change).
+    applyI18nToSettings();
+    renderLangSelect();
+  }
+
+  function applyI18nToSettings() {
+    const setText = (id, key) => { const el = document.getElementById(id); if (el) el.textContent = t(key); };
+    setText('settingsTitle', 'settings_title');
+    setText('settingsHdrSection', 'settings_section');
+    setText('settingsHdrFull', 'settings_full');
+    setText('settingsHdrCompact', 'settings_compact');
+    setText('settingsHdrLang', 'settings_language');
+    setText('settingsHdrOther', 'settings_other');
+    setText('settingsLangLabel', 'settings_language');
+    const reset = document.getElementById('settingsReset');
+    if (reset) reset.textContent = t('settings_reset');
+  }
+
+  function renderLangSelect() {
+    const sel = document.getElementById('langSelect');
+    if (!sel || !window.i18n) return;
+    const current = window.i18n.getStored();
+    sel.innerHTML = `<option value="auto">${t('lang_auto')}</option>` +
+      window.i18n.LANGS.map(l => `<option value="${l.code}" ${current === l.code ? 'selected' : ''}>${l.name}</option>`).join('');
+    sel.onchange = () => {
+      window.i18n.setLang(sel.value);
+      renderTable();
+      applyI18nToSettings();
+      applyStaticI18n();
+      if (currentSnap?.players?.length) renderPlayers(currentSnap);
+    };
   }
 
   body.addEventListener('change', (e) => {
@@ -1141,6 +1173,44 @@ window.api.onRefresh(refresh);
 
 // Mode-change re-render handled in the single onMode handler above.
 
+// Translate static HTML elements that aren't re-rendered per snap.
+function applyStaticI18n() {
+  const setText = (sel, key, vars) => { const el = document.querySelector(sel); if (el) el.textContent = t(key, vars); };
+  setText('#checkNowBtn strong', 'check_now');
+  // "Just queued? Check now" — split: the leading text + bold action.
+  const checkBtn = document.getElementById('checkNowBtn');
+  if (checkBtn) {
+    const strong = checkBtn.querySelector('strong');
+    checkBtn.firstChild && checkBtn.removeChild(checkBtn.firstChild);
+    checkBtn.insertBefore(document.createTextNode(t('check_now_q') + ' '), strong);
+    if (strong) strong.textContent = t('check_now');
+  }
+  setText('.pm-title', 'match_over');
+  setText('#pmSelfSuffix', 'view_suffix');
+  setText('#footerData', 'footer_data');
+  setText('#footerContact', 'footer_contact');
+  setText('#openLogLink', 'footer_logs');
+  setText('#hintBar', 'hint_hotkeys');
+  setText('#helpLogIntro', 'help_log_intro');
+  setText('#helpIssueLag', 'help_issues_lag');
+  setText('#helpIssueClick', 'help_issues_click');
+  setText('#helpIssueSteam', 'help_issues_steam');
+  setText('#settingsHelpText', 'settings_help');
+  // Help modal headers
+  const helpHeaders = document.querySelectorAll('.help-card h3');
+  // Order: Hotkeys, Log file, Links, Common issues
+  if (helpHeaders[0]) helpHeaders[0].textContent = t('help_hotkeys');
+  if (helpHeaders[1]) helpHeaders[1].textContent = t('help_log');
+  if (helpHeaders[2]) helpHeaders[2].textContent = t('help_links');
+  if (helpHeaders[3]) helpHeaders[3].textContent = t('help_issues');
+  const openLogBtn = document.getElementById('helpOpenLog');
+  if (openLogBtn) openLogBtn.textContent = t('help_open_log');
+  // Settings panel "post-match" label
+  const postLbl = document.getElementById('settingsPostMatchLabel');
+  if (postLbl) postLbl.textContent = t('settings_postmatch') !== 'settings_postmatch' ? t('settings_postmatch') : postLbl.textContent;
+}
+applyStaticI18n();
+
 window.api.getVersion().then(v => {
   const el = document.getElementById('appVersion');
   if (el && v) el.textContent = 'v' + v;
@@ -1177,7 +1247,8 @@ async function checkForUpdate(currentVersion) {
     const text = banner.querySelector('.update-text');
     const link = document.getElementById('updateLink');
     const close = document.getElementById('updateClose');
-    text.textContent = `Update available: v${latest} (you have v${currentVersion})`;
+    text.textContent = t('update_available', { latest, current: currentVersion });
+    link.textContent = t('download');
     link.href = data.html_url || `https://github.com/aliencoded/aoe2-stats-overlay-rust/releases/latest`;
     close.onclick = () => {
       banner.setAttribute('hidden', '');

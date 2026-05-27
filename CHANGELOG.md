@@ -44,6 +44,9 @@ All notable changes to this project will be documented here.
 ### Backend
 - **Match duration** now plumbed end-to-end (companion `RecentMatch` → `PlayerMatch` → frontend). Parsed from companion's `duration` field with fallback to `finished - started` rfc3339 math. Feeds the opening-probability game-length adjustment.
 
+### Added
+- **Language support**: pick your language in Settings. Available: English, Español, Deutsch, Français, Italiano, Português (BR), Русский, Polski, 中文, 한국어. Civ names use official AoE2DE translations.
+
 ### Dev
 - Removed dead code: legacy drops badge variables, dual mode listener.
 

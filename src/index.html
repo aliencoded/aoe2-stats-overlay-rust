@@ -32,17 +32,17 @@
     <div id="postmatchCard" class="postmatch-card" hidden>
       <div class="pm-title">Match over</div>
       <div class="pm-body">
-        <span id="pmSelfWrap" hidden><a id="pmSelfLink" href="#" target="_blank" rel="noopener noreferrer">View this match</a> to see full stats and breakdown.</span>
+        <span id="pmSelfWrap" hidden><a id="pmSelfLink" href="#" target="_blank" rel="noopener noreferrer">View this match</a> <span id="pmSelfSuffix">to see full stats and breakdown.</span></span>
       </div>
     </div>
     <footer class="attrib">
-      Data:
+      <span id="footerData">Data:</span>
       <a href="https://www.aoe2companion.com/" target="_blank" rel="noopener noreferrer">aoe2companion.com</a>
-      · <a href="https://www.linkedin.com/in/aliencoded/" target="_blank" rel="noopener noreferrer">contact dev</a>
+      · <a id="footerContact" href="https://www.linkedin.com/in/aliencoded/" target="_blank" rel="noopener noreferrer">contact dev</a>
       · <a href="#" id="openLogLink" title="Open log folder">logs</a>
       · <span id="appVersion" class="appver">v-</span>
     </footer>
-    <footer class="hint">Ctrl+Shift+S hide · Ctrl+Shift+R refresh · Ctrl+Shift+C click-through</footer>
+    <footer class="hint" id="hintBar">Ctrl+Shift+S hide · Ctrl+Shift+R refresh · Ctrl+Shift+C click-through</footer>
   </div>
 
   <div id="helpModal" class="help-modal" hidden>
@@ -59,7 +59,7 @@
       </ul>
 
       <h3>Log file</h3>
-      <p class="help-log">For bug reports, grab the log file and attach it.</p>
+      <p class="help-log" id="helpLogIntro">For bug reports, grab the log file and attach it.</p>
       <button id="helpOpenLog" class="help-btn">Open log folder</button>
 
       <h3>Links</h3>
@@ -70,35 +70,40 @@
       </ul>
 
       <h3>Common issues</h3>
-      <ul class="help-issues">
-        <li><strong>Stats took a while to show?</strong> Companion API indexing takes 10–30s after a match starts.</li>
-        <li><strong>Overlay won't respond to clicks?</strong> Click-through is on. Press Ctrl+Shift+C.</li>
-        <li><strong>Wrong Steam account?</strong> Restart the overlay after switching accounts.</li>
+      <ul class="help-issues" id="helpIssuesList">
+        <li id="helpIssueLag">Stats took a while to show? Companion API indexing takes 10–30s after a match starts.</li>
+        <li id="helpIssueClick">Overlay won't respond to clicks? Click-through is on. Press Ctrl+Shift+C.</li>
+        <li id="helpIssueSteam">Wrong Steam account? Restart the overlay after switching accounts.</li>
       </ul>
     </div>
   </div>
   <div id="settingsModal" class="help-modal" hidden>
     <div class="help-card settings-card">
       <button id="settingsClose" class="help-close" aria-label="Close">×</button>
-      <h2>Display settings</h2>
-      <p class="help-version">Pick what each opponent card shows in each mode.</p>
+      <h2 id="settingsTitle">Display settings</h2>
+      <p class="help-version" id="settingsHelpText">Pick what each opponent card shows in each mode.</p>
       <div class="settings-table-wrap">
         <table class="settings-table">
           <thead>
-            <tr><th>Section</th><th>Full</th><th>Compact</th></tr>
+            <tr><th id="settingsHdrSection">Section</th><th id="settingsHdrFull">Full</th><th id="settingsHdrCompact">Compact</th></tr>
           </thead>
           <tbody id="settingsBody"></tbody>
         </table>
       </div>
-      <h3>Other</h3>
+      <h3 id="settingsHdrLang">Language</h3>
       <ul class="settings-other">
-        <li><label><input type="checkbox" data-other="postMatchCard"> Show post-match "support aoe2companion" card</label></li>
+        <li><label><span id="settingsLangLabel">Language</span> <select id="langSelect"></select></label></li>
+      </ul>
+      <h3 id="settingsHdrOther">Other</h3>
+      <ul class="settings-other">
+        <li><label><input type="checkbox" data-other="postMatchCard"> <span id="settingsPostMatchLabel">Show post-match "support aoe2companion" card</span></label></li>
       </ul>
       <div class="settings-actions">
         <button id="settingsReset" class="help-btn">Reset to defaults</button>
       </div>
     </div>
   </div>
+  <script src="i18n.js"></script>
   <script src="main.js"></script>
 </body>
 </html>
