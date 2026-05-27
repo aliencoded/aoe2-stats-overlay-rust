@@ -5,7 +5,7 @@
 
 Instant in-game opponent scouting for **Age of Empires II: Definitive Edition**. Shows your opponent's rating, civ tendencies, likely openings, smurf probability, and session state — right on top of the game, while you play.
 
-![Hero](docs/screenshots/hero-v2.png)
+![Hero](docs/screenshots/hero-v2.webp)
 
 Project page: https://www.thinkingslightly.com/aoe2-opponent-stats-ui-overlay/
 
@@ -22,7 +22,7 @@ Windows 10/11. Steam version of AoE2DE. SmartScreen will warn — click **More i
 
 | Full card | Scout summary detail |
 |---|---|
-| ![Full](docs/screenshots/full-card-v2.png) | ![Scout summary](docs/screenshots/scout-summary.png) |
+| ![Full](docs/screenshots/full-card-v2.webp) | ![Scout summary](docs/screenshots/scout-summary.webp) |
 
 ## What you get per opponent
 
