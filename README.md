@@ -3,7 +3,7 @@
 [![Release](https://img.shields.io/github/v/release/aliencoded/aoe2-stats-overlay-rust)](https://github.com/aliencoded/aoe2-stats-overlay-rust/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Instant in-game opponent scouting for **Age of Empires II: Definitive Edition**. Shows your opponent's rating, civ tendencies, likely openings, smurf probability, and session state — right on top of the game, while you play.
+Instant in-game opponent scouting for **Age of Empires II: Definitive Edition**. Shows your opponent's rating, civ tendencies, likely openings, smurf probability, and session state. Right on top of the game while you play.
 
 ![Hero](docs/screenshots/hero-v2.webp)
 
@@ -61,7 +61,7 @@ Auto switches full ↔ compact when you focus / unfocus the game.
 
 ## Languages
 
-English, Español, Deutsch, Français, Italiano, Português (BR), Русский, Polski, 中文, 한국어. Civ names use the official AoE2DE translations. Pick yours in Settings — no restart needed.
+English, Español, Deutsch, Français, Italiano, Português (BR), Русский, Polski, 中文, 한국어. Pick yours in Settings.
 
 ## Comparison
 
@@ -76,11 +76,11 @@ English, Español, Deutsch, Français, Italiano, Português (BR), Русский
 
 ## Data source
 
-All stats come from [aoe2companion.com](https://www.aoe2companion.com/) — the same public data their app and site use. No analytics, no error reporting, no account, no Microsoft/Xbox calls.
+All stats come from [aoe2companion.com](https://www.aoe2companion.com/).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE)
 
 ## Disclaimer
 
