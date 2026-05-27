@@ -71,6 +71,8 @@ pub struct RecentMatch {
     pub rating: Option<i64>,
     #[serde(rename = "ratingDiff")]
     pub rating_diff: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -287,6 +289,7 @@ pub async fn fetch_recent_matches(profile_id: &str, limit: u32) -> Result<Vec<Re
                                 won: p.get("won").and_then(|v| v.as_bool()),
                                 rating: p.get("rating").and_then(|v| v.as_i64()),
                                 rating_diff: p.get("ratingDiff").and_then(|v| v.as_i64()),
+                                duration: extract_duration(m),
                             });
                         }
                     }
@@ -295,6 +298,17 @@ pub async fn fetch_recent_matches(profile_id: &str, limit: u32) -> Result<Vec<Re
         }
     }
     Ok(out)
+}
+
+fn extract_duration(m: &Value) -> Option<i64> {
+    if let Some(d) = m.get("duration").and_then(|v| v.as_i64()) {
+        return Some(d);
+    }
+    let started = m.get("started").and_then(|v| v.as_str())?;
+    let finished = m.get("finished").and_then(|v| v.as_str())?;
+    let s = chrono::DateTime::parse_from_rfc3339(started).ok()?;
+    let f = chrono::DateTime::parse_from_rfc3339(finished).ok()?;
+    Some((f.timestamp() - s.timestamp()).max(0))
 }
 
 pub async fn fetch_many_matches(
@@ -339,6 +353,7 @@ pub async fn fetch_many_matches(
                                 won: p.get("won").and_then(|v| v.as_bool()),
                                 rating: p.get("rating").and_then(|v| v.as_i64()),
                                 rating_diff: p.get("ratingDiff").and_then(|v| v.as_i64()),
+                                duration: extract_duration(m),
                             });
                         }
                     }

@@ -2,6 +2,17 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
+const _log = (level, target, message) => {
+  try { invoke('log_msg', { level, target, message: String(message) }); } catch (_) {}
+  const c = console[level === 'warn' ? 'warn' : level === 'error' ? 'error' : 'log'];
+  c(`[${target}]`, message);
+};
+window.log = {
+  info:  (target, msg) => _log('info',  target, msg),
+  warn:  (target, msg) => _log('warn',  target, msg),
+  error: (target, msg) => _log('error', target, msg),
+};
+
 window.api = {
   getSteamId: async () => {
     try { return await invoke('steam_id'); }
@@ -21,6 +32,62 @@ window.api = {
   getVersion: () => invoke('app_version'),
   openLogFolder: () => invoke('open_log_folder'),
 };
+
+// --- Display settings (what's shown per mode) ---
+const SETTING_SECTIONS = [
+  { key: 'rating',          label: 'Rating (1v1 + TG)' },
+  { key: 'threat',          label: 'Scout summary (smurf + likely openings)' },
+  { key: 'formatBreakdown', label: 'ELO + Civ breakdown by format' },
+  { key: 'activity',        label: 'Activity (games today / week)' },
+  { key: 'lastMatches',     label: 'Recent matches list (any format)' },
+  { key: 'profileLink',     label: 'Profile link (companion)' },
+  { key: 'selfBar',         label: 'Your own stats bar' },
+];
+const DEFAULT_SETTINGS = {
+  full:    { rating: true, threat: true, formatBreakdown: true, activity: true, lastMatches: true,  profileLink: true,  selfBar: true },
+  compact: { rating: true, threat: true, formatBreakdown: true, activity: true, lastMatches: false, profileLink: true, selfBar: true },
+  postMatchCard: true,
+};
+const SETTINGS_KEY = 'displaySettings.v2';
+const SETTINGS_KEY_V1 = 'displaySettings.v1';
+let settings = loadSettings();
+
+function loadSettings() {
+  try {
+    let raw = localStorage.getItem(SETTINGS_KEY);
+    // Migrate v1 → v2 (renamed `pill` key to `compact`).
+    if (!raw) {
+      const v1 = localStorage.getItem(SETTINGS_KEY_V1);
+      if (v1) {
+        const old = JSON.parse(v1);
+        raw = JSON.stringify({
+          full: old.full,
+          compact: old.pill,
+          postMatchCard: old.postMatchCard,
+        });
+        localStorage.setItem(SETTINGS_KEY, raw);
+      }
+    }
+    if (!raw) return structuredClone(DEFAULT_SETTINGS);
+    const parsed = JSON.parse(raw);
+    return {
+      full: { ...DEFAULT_SETTINGS.full, ...(parsed.full || {}) },
+      compact: { ...DEFAULT_SETTINGS.compact, ...(parsed.compact || parsed.pill || {}) },
+      postMatchCard: parsed.postMatchCard ?? DEFAULT_SETTINGS.postMatchCard,
+    };
+  } catch (e) {
+    window.log?.warn?.('settings', `load failed, using defaults: ${e}`);
+    return structuredClone(DEFAULT_SETTINGS);
+  }
+}
+function saveSettings() {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); }
+  catch (e) { window.log?.warn?.('settings', `save failed: ${e}`); }
+}
+function S(key) {
+  // True if section is enabled for the current mode.
+  return !!settings[currentMode]?.[key];
+}
 
 const $players = document.getElementById('players');
 const $status = document.getElementById('status');
@@ -54,6 +121,7 @@ function renderEmpty(msg) {
 
 function renderSelfBar(s) {
   if (!s) return '';
+  if (!S('selfBar')) return '';
   const r1 = s.rank1v1 || {}, rt = s.rankTG || {};
   return `
     <div class="selfbar">
@@ -74,6 +142,596 @@ function selfProfileLinks(s) {
   </span>`;
 }
 
+// --- Per-format breakdown helpers ---
+// Map companion leaderboard names to short labels.
+// Companion returns the leaderboard as a slug ("rm_1v1", "rm_team", "ew_1v1",
+// "ew_team", "unranked_1v1", "unranked_team"), or sometimes as a numeric ID
+// or human name. Map all three.
+const LEADERBOARD_SLUG_MAP = {
+  'rm_1v1':           '1v1 RM',
+  'rm_team':          'TG RM',
+  'ew_1v1':           '1v1 EW',
+  'ew_team':          'TG EW',
+  'dm_1v1':           '1v1 DM',
+  'dm_team':          'TG DM',
+  'unranked_1v1':     'Unranked 1v1',
+  'unranked_team':    'Unranked TG',
+  'unranked':         'Unranked',
+  'qm_1v1':           'QM 1v1',
+  'qm_2v2':           'QM 2v2',
+  'qm_3v3':           'QM 3v3',
+  'qm_4v4':           'QM 4v4',
+};
+const LEADERBOARD_ID_MAP = {
+  '0':  'Unranked',
+  '1':  'Deathmatch',
+  '2':  'Team DM',
+  '3':  '1v1 RM',
+  '4':  'TG RM',
+  '13': '1v1 EW',
+  '14': 'TG EW',
+  '26': 'QM 1v1',
+  '27': 'QM 2v2',
+  '28': 'QM 3v3',
+  '29': 'QM 4v4',
+};
+function leaderboardShort(name) {
+  if (name == null || name === '') return 'Other';
+  const raw = String(name).trim();
+  // Slug match (companion's actual format).
+  if (LEADERBOARD_SLUG_MAP[raw]) return LEADERBOARD_SLUG_MAP[raw];
+  // Numeric ID.
+  if (/^\d+$/.test(raw)) return LEADERBOARD_ID_MAP[raw] || `Format ${raw}`;
+  const n = raw.toLowerCase();
+  if (n.includes('1v1') && n.includes('random')) return '1v1 RM';
+  if (n.includes('team') && n.includes('random')) return 'TG RM';
+  if (n.includes('1v1') && n.includes('empire')) return '1v1 EW';
+  if (n.includes('team') && n.includes('empire')) return 'TG EW';
+  if (n.includes('unranked')) return 'Unranked';
+  if (n.includes('death')) return n.includes('team') ? 'Team DM' : 'Deathmatch';
+  if (n.includes('quick')) return n.replace(/quick\s*match\s*/i, 'QM ').trim();
+  // Generic snake_case fallback: try parts.
+  if (n.includes('_')) {
+    const parts = n.split('_');
+    if (parts.includes('1v1')) return parts.includes('rm') ? '1v1 RM' : parts.includes('ew') ? '1v1 EW' : '1v1';
+    if (parts.includes('team')) return parts.includes('rm') ? 'TG RM' : parts.includes('ew') ? 'TG EW' : 'TG';
+  }
+  return raw;
+}
+
+function groupMatchesByFormat(matches) {
+  const groups = {};
+  for (const m of (matches || [])) {
+    const key = leaderboardShort(m.leaderboard);
+    (groups[key] ||= []).push(m);
+  }
+  // Sort each group by date descending (companion already returns this, but safe).
+  for (const k of Object.keys(groups)) {
+    groups[k].sort((a, b) => (new Date(b.started)) - (new Date(a.started)));
+  }
+  return groups;
+}
+
+function statsForGroup(matches, currentMap) {
+  if (!matches || !matches.length) return null;
+  const games = matches.length;
+  const wins = matches.filter(m => m.won === true).length;
+  const wr = games > 0 ? Math.round((100 * wins) / games) : null;
+  // Civ counts + wins per civ
+  const civAgg = {}; // { civ: { games, wins } }
+  for (const m of matches) {
+    if (!m.civ) continue;
+    const a = civAgg[m.civ] ||= { games: 0, wins: 0 };
+    a.games += 1;
+    if (m.won === true) a.wins += 1;
+  }
+  const civEntries = Object.entries(civAgg);
+  const topCivs = civEntries
+    .map(([civ, v]) => ({ civ, games: v.games, wins: v.wins, wr: Math.round((100 * v.wins) / v.games) }))
+    .sort((a, b) => b.games - a.games)
+    .slice(0, 5);
+  const topCiv = civEntries.sort((a, b) => b[1].games - a[1].games)[0];
+  // Best civ by winrate, min 3 games threshold to filter noise
+  const bestCiv = civEntries
+    .filter(([, v]) => v.games >= 3)
+    .map(([civ, v]) => ({ civ, games: v.games, wr: Math.round((100 * v.wins) / v.games) }))
+    .sort((a, b) => b.wr - a.wr)[0] || null;
+  const civPool = civEntries.length;
+  // Last 5 W/L (newest first → reverse to oldest→newest for display)
+  const last5 = matches.slice(0, 5).reverse();
+  // Rating range
+  const ratings = matches.map(m => m.rating).filter(r => Number.isFinite(r));
+  const ratingMin = ratings.length ? Math.min(...ratings) : null;
+  const ratingMax = ratings.length ? Math.max(...ratings) : null;
+  // Trend: full sequence of ratings in this format bucket (oldest→newest)
+  // — companion gives us up to 40 matches total split across formats, so each
+  // bucket gets however many it gets.
+  const oldestFirst = matches.slice().reverse();
+  const trendSeries = oldestFirst.map(m => m.rating).filter(r => Number.isFinite(r));
+  // Net ELO change still scoped to last 5 (recent direction signal).
+  const diffs = matches.slice(0, 5).map(m => m.ratingDiff).filter(n => Number.isFinite(n));
+  const trend = diffs.length ? diffs.reduce((a, b) => a + b, 0) : null;
+  // Map record on current match's map
+  let mapStats = null;
+  if (currentMap) {
+    const lc = String(currentMap).toLowerCase();
+    const onMap = matches.filter(m => (m.map || '').toLowerCase() === lc);
+    if (onMap.length) {
+      const onWins = onMap.filter(m => m.won === true).length;
+      mapStats = { games: onMap.length, wins: onWins, winrate: Math.round((100 * onWins) / onMap.length) };
+    }
+  }
+  return { games, wins, wr, topCiv, topCivs, bestCiv, civPool, last5, ratingMin, ratingMax, trend, trendSeries, mapStats };
+}
+
+// Inline sparkline SVG for ELO trend. Last N ratings, oldest→newest left to right.
+function sparkline(ratings, w = 100, h = 20) {
+  if (!ratings || ratings.length < 2) return '';
+  const min = Math.min(...ratings);
+  const max = Math.max(...ratings);
+  const range = (max - min) || 1;
+  const pad = 1;
+  const innerW = w - pad * 2;
+  const innerH = h - pad * 2;
+  const points = ratings.map((r, i) => {
+    const x = pad + (i / (ratings.length - 1)) * innerW;
+    const y = pad + (innerH - ((r - min) / range) * innerH);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const net = ratings[ratings.length - 1] - ratings[0];
+  const stroke = net > 0 ? '#6cc46c' : net < 0 ? '#e88' : '#9aa';
+  const lastX = pad + innerW;
+  const lastY = pad + (innerH - ((ratings[ratings.length - 1] - min) / range) * innerH);
+  return `<svg class="sparkline" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-label="ELO trend last ${ratings.length} games">
+    <polyline points="${points}" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="1.8" fill="${stroke}"/>
+  </svg>`;
+}
+
+function buildFormatStats(player, currentMap) {
+  const groups = groupMatchesByFormat(player.matches);
+  // Always include the two primary formats so missing data shows as a clear
+  // placeholder rather than vanishing the row.
+  if (!groups['1v1 RM']) groups['1v1 RM'] = [];
+  if (!groups['TG RM']) groups['TG RM'] = [];
+  const labels = Object.keys(groups);
+  labels.sort((a, b) => {
+    if (a === currentMatchFormat && b !== currentMatchFormat) return -1;
+    if (b === currentMatchFormat && a !== currentMatchFormat) return 1;
+    return groups[b].length - groups[a].length;
+  });
+  return labels.map(lab => {
+    let rank = null;
+    if (lab.startsWith('1v1')) rank = player.rank1v1;
+    else if (lab.startsWith('TG')) rank = player.rankTG;
+    return { label: lab, stats: statsForGroup(groups[lab], currentMap), rank, isCurrent: lab === currentMatchFormat };
+  });
+}
+
+// Civ → likely cheese/early-game strats (community consensus, not exhaustive).
+const CIV_CHEESE = {
+  Sicilians:    [{ name: 'Donjon rush', sev: 'high' }, { name: 'Serjeant FC', sev: 'med' }],
+  Incas:        [{ name: 'Tower rush', sev: 'high' }, { name: 'Eagle drush', sev: 'med' }],
+  Mongols:      [{ name: 'Fast scouts', sev: 'high' }, { name: 'Mangudai timing', sev: 'med' }],
+  Goths:        [{ name: 'M@A → flush', sev: 'high' }, { name: 'Infantry spam', sev: 'med' }],
+  Burgundians:  [{ name: 'Feudal knights', sev: 'high' }],
+  Franks:       [{ name: 'Knight rush', sev: 'high' }, { name: 'Castle drop', sev: 'med' }],
+  Persians:     [{ name: 'Douche', sev: 'med' }, { name: 'FC knights', sev: 'med' }],
+  Aztecs:       [{ name: 'Drush FC', sev: 'high' }, { name: 'Eagle rush', sev: 'med' }],
+  Chinese:      [{ name: 'Fast Feudal', sev: 'med' }],
+  Lithuanians:  [{ name: 'Drush FC', sev: 'high' }, { name: 'Leitis push', sev: 'med' }],
+  Britons:      [{ name: 'Archer rush', sev: 'high' }, { name: 'Tower rush', sev: 'med' }],
+  Mayans:       [{ name: 'Archer rush', sev: 'high' }, { name: 'Eagle rush', sev: 'med' }],
+  Ethiopians:   [{ name: 'Archer rush', sev: 'high' }],
+  Vikings:      [{ name: 'Fast Feudal archers', sev: 'high' }],
+  Magyars:      [{ name: 'Scout rush', sev: 'high' }],
+  Berbers:      [{ name: 'Scout rush (cheap cav)', sev: 'high' }],
+  Cumans:       [{ name: 'Feudal 2nd TC', sev: 'high' }, { name: 'Feudal siege', sev: 'med' }],
+  Tatars:       [{ name: 'Scout rush', sev: 'med' }, { name: 'Flaming camel', sev: 'low' }],
+  Khmer:        [{ name: 'Scorpion drop', sev: 'med' }, { name: 'Battle elephant', sev: 'med' }],
+  Gurjaras:     [{ name: 'Shrivamsha rush', sev: 'high' }, { name: '10-vil eco', sev: 'med' }],
+  Bengalis:     [{ name: 'Ratha rush', sev: 'high' }],
+  Romans:       [{ name: 'Scout legionary', sev: 'med' }],
+  Armenians:    [{ name: 'Warrior priest', sev: 'med' }],
+  Georgians:    [{ name: 'Monaspa push', sev: 'med' }],
+  Hindustanis:  [{ name: 'Light cav rush', sev: 'med' }, { name: 'Imp camel', sev: 'low' }],
+  Vietnamese:   [{ name: 'Rattan archer', sev: 'med' }],
+  Slavs:        [{ name: 'Boyar push', sev: 'med' }, { name: 'Druzhina inf', sev: 'med' }],
+  Bohemians:    [{ name: 'Monk + tower', sev: 'high' }],
+  Spanish:      [{ name: 'Tower rush', sev: 'med' }, { name: 'Fast Castle', sev: 'med' }],
+  Portuguese:   [{ name: 'Tower rush', sev: 'med' }, { name: 'Feitoria boom', sev: 'low' }],
+  Koreans:      [{ name: 'Tower rush', sev: 'high' }],
+  Turks:        [{ name: 'Tower rush', sev: 'med' }, { name: 'FC Janissary', sev: 'med' }],
+  Burmese:      [{ name: 'Tower rush', sev: 'med' }, { name: 'Arambai', sev: 'med' }],
+  Saracens:     [{ name: 'Archer rush', sev: 'med' }, { name: 'Market abuse', sev: 'low' }],
+  Italians:     [{ name: 'Fast Imp', sev: 'low' }],
+  Japanese:     [{ name: 'M@A flush', sev: 'high' }, { name: 'Fast Castle samurai', sev: 'med' }],
+  Teutons:      [{ name: 'Monk push', sev: 'med' }, { name: 'Castle drop', sev: 'med' }],
+  Huns:         [{ name: 'Scout rush', sev: 'high' }, { name: 'No-house FC', sev: 'med' }],
+  Celts:        [{ name: 'Siege push', sev: 'med' }, { name: 'M@A rush', sev: 'med' }],
+  Malians:      [{ name: 'M@A → archer', sev: 'med' }, { name: 'Gbeto rush', sev: 'med' }],
+  Malay:        [{ name: 'Fast Imp', sev: 'med' }, { name: 'Fishing boom', sev: 'low' }],
+  Bulgarians:   [{ name: 'M@A rush (free upg)', sev: 'high' }],
+  Dravidians:   [{ name: 'M@A rush', sev: 'high' }, { name: 'Elephant archer', sev: 'med' }],
+  Poles:        [{ name: 'Folwark boom', sev: 'med' }, { name: 'Obuch push', sev: 'med' }],
+  Sicilian:     null,
+};
+
+function detectSmurf(p) {
+  const reasons = [];
+  let score = 0;
+  const r1 = p.rank1v1 || {};
+  const rt = p.rankTG || {};
+  const matches = p.matches || [];
+  const rating = r1.rating ?? rt.rating;
+  const games = r1.games ?? rt.games ?? 0;
+
+  if (rating && rating >= 1500 && games > 0 && games < 100) {
+    score += 3;
+    reasons.push(`${rating} ELO in only ${games} games`);
+  } else if (rating && rating >= 1300 && games > 0 && games < 50) {
+    score += 2;
+    reasons.push(`${rating} ELO in only ${games} games`);
+  }
+
+  // Recent rating climb from match buckets.
+  const ratedRecent = matches.filter(m => typeof m.rating === 'number').slice(0, 20);
+  if (ratedRecent.length >= 8) {
+    const newest = ratedRecent[0].rating;
+    const oldest = ratedRecent[ratedRecent.length - 1].rating;
+    const delta = newest - oldest;
+    if (delta >= 250) { score += 3; reasons.push(`+${delta} ELO in last ${ratedRecent.length} games`); }
+    else if (delta >= 150) { score += 2; reasons.push(`+${delta} ELO in last ${ratedRecent.length} games`); }
+  }
+
+  // Recent win streak from rank API.
+  const streak = r1.streak ?? rt.streak ?? 0;
+  if (streak >= 6) { score += 1; reasons.push(`${streak}-game win streak`); }
+
+  // High recent WR.
+  const recent20 = matches.slice(0, 20).filter(m => m.won != null);
+  if (recent20.length >= 10) {
+    const wins = recent20.filter(m => m.won).length;
+    const wr = wins / recent20.length;
+    if (wr >= 0.80) { score += 2; reasons.push(`${Math.round(wr*100)}% WR last ${recent20.length}`); }
+    else if (wr >= 0.70) { score += 1; reasons.push(`${Math.round(wr*100)}% WR last ${recent20.length}`); }
+  }
+
+  const hasSignal = (p.rank1v1 || p.rankTG || (p.matches || []).length > 0);
+  if (!hasSignal) return null;
+  const pct = Math.min(95, score * 12);
+  const level = pct >= 60 ? 'high' : pct >= 30 ? 'med' : pct >= 10 ? 'low' : 'none';
+  return { pct, level, reasons };
+}
+
+// Civ → game phase strength (community consensus, simplified).
+const CIV_PHASE = {
+  early: ['Mongols','Magyars','Berbers','Huns','Aztecs','Mayans','Britons','Goths','Burgundians','Franks','Sicilians','Incas','Lithuanians','Bulgarians','Dravidians','Cumans','Japanese','Gurjaras','Bengalis','Ethiopians','Romans'],
+  late:  ['Teutons','Spanish','Turks','Persians','Italians','Malay','Vietnamese','Koreans','Bohemians','Slavs','Vikings','Portuguese','Byzantines','Khmer'],
+};
+function civPhase(civ) {
+  if (!civ) return null;
+  const c = titleCase(String(civ).trim());
+  if (CIV_PHASE.early.some(x => x.toLowerCase() === c.toLowerCase())) return 'early';
+  if (CIV_PHASE.late.some(x  => x.toLowerCase() === c.toLowerCase())) return 'late';
+  return 'mid';
+}
+function lookupCheese(civ) {
+  if (!civ) return [];
+  const target = String(civ).trim().toLowerCase();
+  for (const [k, v] of Object.entries(CIV_CHEESE)) {
+    if (k.toLowerCase() === target) return v || [];
+  }
+  return [];
+}
+function detectFavoriteCivPhase(p) {
+  const matches = p.matches || [];
+  if (!matches.length) return null;
+  const tally = {};
+  for (const m of matches) {
+    if (!m.civ) continue;
+    tally[m.civ] = (tally[m.civ] || 0) + 1;
+  }
+  const top = Object.entries(tally).sort((a,b) => b[1] - a[1])[0];
+  if (!top) return null;
+  return { civ: titleCase(top[0]), games: top[1], phase: civPhase(top[0]) };
+}
+
+function detectSession(p) {
+  const matches = (p.matches || []).filter(m => m.started);
+  if (!matches.length) return null;
+  const parseT = s => { const t = Date.parse(s); return Number.isFinite(t) ? t : null; };
+  const now = Date.now();
+  const times = matches.map(m => parseT(m.started)).filter(t => t != null).sort((a,b) => b - a);
+  if (!times.length) return null;
+  const last = times[0];
+  const sinceMin = (now - last) / 60000;
+  // Count games in last 4h window from most recent (their current session).
+  const sessionWin = 4 * 60 * 60 * 1000;
+  const sessionGames = times.filter(t => last - t < sessionWin).length;
+  const gamesToday = times.filter(t => now - t < 24 * 60 * 60 * 1000).length;
+  // Gap before this session: time between most recent game and the one before the session window.
+  const beforeSession = times.find(t => last - t >= sessionWin);
+  const gapHrs = beforeSession ? (last - beforeSession) / 3600000 : null;
+
+  if (sinceMin > 30 && sinceMin < 120) {
+    return { label: `warming up · last game ${Math.round(sinceMin)}min ago`, kind: 'fresh' };
+  }
+  if (gapHrs != null && gapHrs >= 24 && sessionGames <= 2) {
+    const days = Math.round(gapHrs / 24);
+    return { label: `fresh session · back after ${days}d`, kind: 'fresh' };
+  }
+  if (gapHrs != null && gapHrs >= 6 && sessionGames <= 2) {
+    return { label: `fresh session · first games today`, kind: 'fresh' };
+  }
+  if (sessionGames >= 8) {
+    return { label: `deep grind · ${sessionGames} games this session`, kind: 'tired' };
+  }
+  if (sessionGames >= 4) {
+    return { label: `${sessionGames}-game session in progress`, kind: 'warm' };
+  }
+  if (gamesToday >= 1) {
+    return { label: `${gamesToday} game${gamesToday>1?'s':''} today`, kind: 'warm' };
+  }
+  return null;
+}
+
+function renderThreatSection(p) {
+  const smurf = detectSmurf(p);
+  const session = detectSession(p);
+  const fav = detectFavoriteCivPhase(p);
+  const civ = p.civ;
+  const cheeses = lookupCheese(civ);
+  const hasData = (p.matches || []).length > 0 || p.rank1v1 || p.rankTG;
+  if (!hasData && !cheeses.length) {
+    return `
+      <div class="sect">Scout summary <span class="sect-sub-note">· smurf signals + likely openings</span></div>
+      <div class="sect-empty">no data yet</div>
+    `;
+  }
+  const smurfTag = smurf && smurf.pct > 0
+    ? `<span class="threat-tag smurf-${smurf.level}" title="${escapeHtml(smurf.reasons.join(' · '))}">${smurf.pct >= 30 ? '⚠' : '✓'} smurf probability: ${smurf.pct}%</span>`
+    : (smurf
+        ? `<span class="threat-tag smurf-none" title="ELO trend, games count, recent WR all normal">✓ smurfing activity not detected</span>`
+        : '');
+  const sessionTag = session
+    ? `<span class="threat-tag session-${session.kind}">${escapeHtml(session.label)}</span>`
+    : '';
+  const phaseTag = fav
+    ? `<span class="threat-tag phase-${fav.phase}" title="based on most-played civ: ${escapeHtml(fav.civ)} (${fav.games}g)">${fav.phase}-game player</span>`
+    : '';
+  const drops = (p.rank1v1 && p.rank1v1.drops) || (p.rankTG && p.rankTG.drops) || 0;
+  const dropTag = drops > 0
+    ? `<span class="threat-tag drops-tag" title="Companion-reported drops/disconnects">${drops} drops</span>`
+    : '';
+  const sevPct = { high: 65, med: 40, low: 22 };
+  const matches = p.matches || [];
+  const civGames = civ ? matches.filter(m => (m.civ || '').toLowerCase() === civ.toLowerCase()) : [];
+  const civPlayCount = civGames.length;
+  const civWins = civGames.filter(m => m.won).length;
+  const civWR = civPlayCount > 0 ? civWins / civPlayCount : null;
+  const recentTotal = matches.length || 1;
+  const civShare = civPlayCount / recentTotal;
+  let famMult = 0.8;
+  if (civPlayCount === 0) famMult = 0.6;
+  else if (civPlayCount >= 8 || civShare >= 0.25) famMult = 1.2;
+  else if (civPlayCount >= 3) famMult = 1.0;
+  const wrMult = civWR == null ? 1.0 : (civWR >= 0.65 ? 1.15 : civWR <= 0.35 ? 0.85 : 1.0);
+
+  // Game-length signal: short avg duration of recent wins → early-aggression player.
+  const durs = matches.filter(m => typeof m.duration === 'number' && m.duration > 60).map(m => m.duration);
+  const winDurs = matches.filter(m => m.won && typeof m.duration === 'number' && m.duration > 60).map(m => m.duration);
+  const avgWinMin = winDurs.length >= 3 ? (winDurs.reduce((a,b)=>a+b,0) / winDurs.length) / 60 : null;
+  const avgAllMin = durs.length >= 5 ? (durs.reduce((a,b)=>a+b,0) / durs.length) / 60 : null;
+  let durMult = 1.0;
+  let durNote = '';
+  if (avgWinMin != null) {
+    if (avgWinMin < 13) { durMult = 1.35; durNote = `avg win ${avgWinMin.toFixed(0)}min → very early-aggressive`; }
+    else if (avgWinMin < 18) { durMult = 1.15; durNote = `avg win ${avgWinMin.toFixed(0)}min → early-aggressive`; }
+    else if (avgWinMin > 35) { durMult = 0.7; durNote = `avg win ${avgWinMin.toFixed(0)}min → late-game player`; }
+    else if (avgWinMin > 28) { durMult = 0.85; durNote = `avg win ${avgWinMin.toFixed(0)}min → mid/late game`; }
+    else { durNote = `avg win ${avgWinMin.toFixed(0)}min`; }
+  } else if (avgAllMin != null) {
+    durNote = `avg game ${avgAllMin.toFixed(0)}min`;
+  }
+
+  const famNote = civPlayCount === 0
+    ? `${civ || 'civ'}: first pick in recent history`
+    : `${civPlayCount} games this civ${civWR != null ? ` · ${Math.round(civWR*100)}% WR` : ''}`;
+  const tagNote = [famNote, durNote].filter(Boolean).join(' · ');
+  const cheeseTags = cheeses.map(c => {
+    const base = sevPct[c.sev] ?? 30;
+    const pct = Math.max(5, Math.min(95, Math.round(base * famMult * wrMult * durMult)));
+    return `<span class="threat-tag cheese-${c.sev}" title="${escapeHtml(tagNote)}">${escapeHtml(c.name)} ${pct}%</span>`;
+  }).join('');
+  return `
+    <div class="sect">Scout summary <span class="sect-sub-note">· smurf signals + likely openings</span></div>
+    <div class="threat-line">${smurfTag}${sessionTag}${phaseTag}${dropTag}${cheeseTags}</div>
+  `;
+}
+
+function renderEloRow(label, st, isCurrent, rank) {
+  // Empty bucket — show placeholder with career rank if available.
+  if (!st) {
+    const careerStr = rank
+      ? `<span class="g">career</span> ${rank.games ?? '?'}g · ${rank.winrate ?? '?'}%`
+      : '';
+    return `
+      <div class="fmt ${isCurrent ? 'fmt-current' : ''} fmt-empty">
+        <div class="fmt-row">
+          <span class="fmt-label">${escapeHtml(label)}</span>
+          <span class="fmt-empty-note g">no recent games in window</span>
+          ${careerStr}
+        </div>
+      </div>`;
+  }
+  const wlSeq = st.last5.map(m =>
+    m.won === true ? '<span class="wl w">W</span>' :
+    m.won === false ? '<span class="wl l">L</span>' :
+    '<span class="wl">·</span>'
+  ).join('');
+  const trendStr = (st.trendSeries && st.trendSeries.length >= 2)
+    ? `<span class="trend-block"><span class="g">Trend</span> ${sparkline(st.trendSeries)} ${st.trend != null ? `<span class="trend ${st.trend > 0 ? 'trend-up' : st.trend < 0 ? 'trend-down' : 'trend-flat'}" title="Net ELO change over last 5 games">${st.trend > 0 ? '+' : ''}${st.trend}</span>` : ''}</span>`
+    : '';
+  const rangeStr = (st.ratingMin != null && st.ratingMax != null)
+    ? `<span class="g">range</span> ${st.ratingMin}–${st.ratingMax}` : '';
+  const mapStr = (st.mapStats && currentMatchMap)
+    ? `<span class="g">on ${escapeHtml(currentMatchMap)}:</span> <strong>${st.mapStats.wins}W-${st.mapStats.games - st.mapStats.wins}L</strong>` : '';
+  let streakBadge = '';
+  if (rank && rank.streak != null) {
+    const n = Number(rank.streak);
+    const cls = n > 0 ? 'streak-win' : n < 0 ? 'streak-loss' : 'streak-flat';
+    const sign = n > 0 ? `${n}W` : n < 0 ? `${Math.abs(n)}L` : '0';
+    streakBadge = `<span class="streak-badge ${cls}">${sign}</span>`;
+  }
+  const careerStr = rank
+    ? `<span class="career-block"><span class="g">Career</span> <strong>${(rank.games ?? '?').toLocaleString()}</strong> games · <strong>${rank.winrate ?? '?'}%</strong> WR</span>`
+    : '';
+  return `
+    <div class="fmt ${isCurrent ? 'fmt-current' : ''}">
+      <div class="fmt-row fmt-header">
+        <span class="fmt-label">${escapeHtml(label)}</span>
+        ${careerStr}
+      </div>
+      <div class="fmt-row">
+        <span class="fmt-window-count g" title="Of the last 40 fetched matches">last ${st.games}: <strong>${st.wr}%</strong> WR (${st.wins}W-${st.games - st.wins}L)</span>
+        ${trendStr}
+      </div>
+      <div class="fmt-row fmt-sub">
+        ${rangeStr}
+        ${(streakBadge || wlSeq) ? `<span class="g">recent</span> ${streakBadge} <span class="fmt-wl">${wlSeq}</span>` : ''}
+        ${mapStr}
+      </div>
+    </div>`;
+}
+
+function renderCivRow(label, st, isCurrent, selfCiv) {
+  if (!st) {
+    return `
+      <div class="fmt ${isCurrent ? 'fmt-current' : ''} fmt-empty">
+        <div class="fmt-row">
+          <span class="fmt-label">${escapeHtml(label)}</span>
+          <span class="fmt-empty-note g">no recent games to analyze civs</span>
+        </div>
+      </div>`;
+  }
+  const topCivs = st.topCivs || [];
+  const totalCivGames = topCivs.reduce((a, c) => a + (c.games || 0), 0) || st.games || 0;
+  const topShare = (st.topCiv && totalCivGames) ? st.topCiv[1].games / totalCivGames : 0;
+  // Tendency classification.
+  let tendencyTag;
+  if (!totalCivGames) {
+    tendencyTag = `<span class="civ-tend tend-none">no civ data</span>`;
+  } else if (topShare >= 0.40) {
+    tendencyTag = `<span class="civ-tend tend-strong">most-played ${escapeHtml(titleCase(st.topCiv[0]))} (${Math.round(topShare*100)}%)</span>`;
+  } else if (topShare >= 0.25) {
+    tendencyTag = `<span class="civ-tend tend-lean">most-played ${escapeHtml(titleCase(st.topCiv[0]))} (${Math.round(topShare*100)}%)</span>`;
+  } else {
+    tendencyTag = `<span class="civ-tend tend-flex">flex picker · no strong civ preference</span>`;
+  }
+  const bestStr = st.bestCiv
+    ? `<span class="civ-tend tend-best">highest WR ${escapeHtml(titleCase(st.bestCiv.civ))} ${st.bestCiv.wr}% (${st.bestCiv.games}g)</span>`
+    : '';
+  const poolStr = '';
+  const mirror = selfCiv && st.topCiv && st.topCiv[0].toLowerCase() === selfCiv.toLowerCase()
+    ? `<span class="mirror-alert">⚠ mirrors your ${escapeHtml(titleCase(selfCiv))}</span>` : '';
+
+  // SVG pie chart of civ distribution (top 5 + "others").
+  let chart = '';
+  if (totalCivGames > 0) {
+    const palette = ['#e57373', '#64b5f6', '#81c784', '#ffb74d', '#ba68c8'];
+    const shown = topCivs.slice(0, 5);
+    const shownGames = shown.reduce((a, c) => a + (c.games || 0), 0) || 1;
+    const slices = shown.map((c, i) => ({ name: titleCase(c.civ), games: c.games, wr: c.wr, color: palette[i] }));
+
+    const cx = 32, cy = 32, r = 30;
+    let acc = 0;
+    const arcs = slices.map(s => {
+      const frac = s.games / shownGames;
+      const a0 = acc * 2 * Math.PI - Math.PI / 2;
+      acc += frac;
+      const a1 = acc * 2 * Math.PI - Math.PI / 2;
+      // Full circle case (single slice = 100%): draw as full circle path.
+      if (frac >= 0.999) {
+        return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${s.color}"><title>${escapeHtml(s.name)}: ${s.games}g${s.wr != null ? ' · ' + s.wr + '%' : ''}</title></circle>`;
+      }
+      const x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0);
+      const x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
+      const large = frac > 0.5 ? 1 : 0;
+      const d = `M ${cx} ${cy} L ${x0.toFixed(2)} ${y0.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x1.toFixed(2)} ${y1.toFixed(2)} Z`;
+      return `<path d="${d}" fill="${s.color}" stroke="rgba(0,0,0,0.4)" stroke-width="0.5"><title>${escapeHtml(s.name)}: ${s.games}g${s.wr != null ? ' · ' + s.wr + '%' : ''}</title></path>`;
+    }).join('');
+    const legend = slices.map(s => {
+      const share = Math.round((s.games / shownGames) * 100);
+      return `<span class="civbar-leg"><span class="civbar-dot" style="background:${s.color.startsWith('url') ? 'repeating-linear-gradient(45deg,#555,#555 2px,#666 2px,#666 4px)' : s.color}"></span>${escapeHtml(s.name)} <span class="g">${share}% (${s.games}g${s.wr != null ? ' · ' + s.wr + '% WR' : ''})</span></span>`;
+    }).join('');
+    chart = `
+      <div class="civpie-wrap">
+        <svg class="civpie" viewBox="0 0 64 64" width="110" height="110">
+          <defs><pattern id="civPieOther" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)"><rect width="6" height="6" fill="#555"/><rect width="3" height="6" fill="#666"/></pattern></defs>
+          ${arcs}
+        </svg>
+        <div class="civbar-legend">${legend}</div>
+      </div>`;
+  }
+
+  return `
+    <div class="fmt ${isCurrent ? 'fmt-current' : ''}">
+      <div class="fmt-row">
+        <span class="fmt-label">${escapeHtml(label)}</span>
+        <span class="fmt-window-count g" title="Of the last 40 fetched matches">${st.games} recent · <strong>${st.wr}%</strong> WR (${st.wins}W-${st.games - st.wins}L)</span>
+        <span class="civ-tend-group">${tendencyTag}${bestStr}</span>
+        ${poolStr}
+        ${mirror}
+      </div>
+      ${chart}
+    </div>`;
+}
+
+// Legacy combined renderer (kept in case of fallback usage).
+function renderFormatBlock(label, st, isCurrent, rank) {
+  if (!st) return '';
+  const wlSeq = st.last5.map(m =>
+    m.won === true ? '<span class="wl w">W</span>' :
+    m.won === false ? '<span class="wl l">L</span>' :
+    '<span class="wl">·</span>'
+  ).join('');
+  const trendStr = (st.trendSeries && st.trendSeries.length >= 2)
+    ? `<span class="g">ELO trend:</span> ${sparkline(st.trendSeries)} ${st.trend != null ? `<span class="trend ${st.trend > 0 ? 'trend-up' : st.trend < 0 ? 'trend-down' : 'trend-flat'}">${st.trend > 0 ? '+' : ''}${st.trend}</span>` : ''}`
+    : (st.trend != null ? `<span class="g">ELO trend:</span> <span class="trend ${st.trend > 0 ? 'trend-up' : st.trend < 0 ? 'trend-down' : 'trend-flat'}">${st.trend > 0 ? '+' : ''}${st.trend}</span>` : '');
+  const civStr = st.topCiv ? `${escapeHtml(titleCase(st.topCiv[0]))} <span class="g">${st.topCiv[1]}×</span>` : '<span class="g">—</span>';
+  const rangeStr = (st.ratingMin != null && st.ratingMax != null) ? 'y' : '';
+  const mapStr = (st.mapStats && currentMatchMap)
+    ? `<span class="g">on ${escapeHtml(currentMatchMap)}: <strong>${st.mapStats.wins}W-${st.mapStats.games - st.mapStats.wins}L</strong></span>` : '';
+  // Career streak from rank API (honest per format).
+  let streakBadge = '';
+  if (rank && rank.streak != null) {
+    const n = Number(rank.streak);
+    const cls = n > 0 ? 'streak-win' : n < 0 ? 'streak-loss' : 'streak-flat';
+    const sign = n > 0 ? `${n}W` : n < 0 ? `${Math.abs(n)}L` : '0';
+    streakBadge = `<span class="streak-badge ${cls}">${sign}</span>`;
+  }
+  // Career line: total games + lifetime winrate from rank.
+  const careerStr = rank
+    ? `<span class="g">career ${rank.games ?? '?'}g · ${rank.winrate ?? '?'}%</span>`
+    : '';
+  return `
+    <div class="fmt ${isCurrent ? 'fmt-current' : ''}">
+      <div class="fmt-row">
+        <span class="fmt-label">${escapeHtml(label)}</span>
+        ${careerStr}
+        ${trendStr}
+        ${(streakBadge || wlSeq) ? `<span class="g">recent:</span> ${streakBadge} <span class="fmt-wl">${wlSeq}</span>` : ''}
+      </div>
+      <div class="fmt-row fmt-sub">
+        <span class="fmt-window g"><strong>${st.wr}%</strong> WR on last ${st.games} games (${st.wins}W-${st.games - st.wins}L)</span>
+        <span class="fmt-civ">top played: ${civStr}</span>
+        ${rangeStr ? `<span class="g">range: ${st.ratingMin}–${st.ratingMax}</span>` : ''}
+        ${mapStr}
+      </div>
+    </div>`;
+}
+
 function playerKey(p) {
   return `card-${(p.profileId || p.name || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
 }
@@ -84,40 +742,69 @@ function cardHtml(p, isAlly) {
   const loading = p.loading;
   const placeholder = (s) => `<span class="g">${s}</span>`;
 
-  const topCivs = (p.topCivs || []).map(c =>
-    `<div class="civ"><span>${escapeHtml(titleCase(c.civ))}</span><span class="g">${c.games}g${c.winrate != null ? ` · ${c.winrate}%` : ''}</span></div>`
-  ).join('') || `<div class="civ">${loading ? placeholder('loading…') : placeholder('no civ data')}</div>`;
-
-  const recentCounts = (p.recentCivCounts || []).map(c =>
-    `<div class="civ"><span>${escapeHtml(titleCase(c.civ))}</span><span class="g">${c.games}× · ${c.winrate ?? '?'}%</span></div>`
-  ).join('') || `<div class="civ">${loading ? placeholder('loading…') : placeholder('no recent data')}</div>`;
-
-  const lastCivs = (p.lastCivs || []).map(m => {
+  // Use raw matches[] (has leaderboard) over lastCivs (doesn't). Take first 5.
+  const lastCivs = (p.matches || []).slice(0, 5).map(m => {
     const wl = m.won === true ? 'W' : m.won === false ? 'L' : '·';
     const cls = m.won === true ? 'w' : m.won === false ? 'l' : '';
     const diff = m.ratingDiff != null ? (m.ratingDiff > 0 ? `+${m.ratingDiff}` : `${m.ratingDiff}`) : '';
     const when = m.started ? relTime(m.started) : '';
-    return `<div class="civ"><span><span class="wl ${cls}">${wl}</span> ${escapeHtml(titleCase(m.civ) || '?')}</span><span class="g">${escapeHtml(m.map || '')} ${diff}${when ? ` · ${when}` : ''}</span></div>`;
+    const fmt = leaderboardShort(m.leaderboard);
+    const fmtCls = fmt.startsWith('1v1') ? 'fmt-tag-1v1' : fmt.startsWith('TG') ? 'fmt-tag-tg' : 'fmt-tag-other';
+    return `<div class="civ"><span><span class="wl ${cls}">${wl}</span> <span class="fmt-tag ${fmtCls}">${escapeHtml(fmt)}</span> ${escapeHtml(titleCase(m.civ) || '?')}</span><span class="g">${escapeHtml(m.map || '')} ${diff}${when ? ` · ${when}` : ''}</span></div>`;
   }).join('') || `<div class="civ">${loading ? placeholder('loading…') : placeholder('no recent matches')}</div>`;
 
   const roleCls = isAlly ? 'ally' : 'opp';
   const roleLabel = isAlly ? 'ALLY' : 'OPP';
   const loadCls = loading ? ' card-loading' : '';
+  const showRating = S('rating');
+  const showActivity = S('activity') && (p.games24h != null || p.games7d != null);
+  const showFormatBreakdown = S('formatBreakdown') && (p.matches || []).length > 0;
+  const showThreat = S('threat') && !isAlly && !p.isSelf;
+  const threatHtml = showThreat ? renderThreatSection(p) : '';
+  const showLastMatches = S('lastMatches');
+  const showProfileLink = S('profileLink');
+
+  const activityStr = showActivity
+    ? `<span><span class="g">Activity:</span> ${p.games24h ?? 0} today · ${p.games7d ?? 0} this week</span>`
+    : '';
+
+  // Build per-format buckets once, reused for ELO + Civ sections.
+  const fmtBuckets = showFormatBreakdown ? buildFormatStats(p, currentMatchMap) : [];
+
+  const dropsStr = '';
+
   return `
     <div class="card card-${roleCls}${loadCls}" id="${playerKey(p)}">
       <div class="name"><span class="role ${roleCls}">${roleLabel}</span> ${escapeHtml(p.name)} ${p.civ ? `<span class="g">[${escapeHtml(p.civ)}]</span>` : ''}</div>
-      <div class="ratings">
+      ${showRating ? `<div class="ratings">
         <span><span class="lbl">1v1</span>${r1.rating ?? (loading ? '…' : '—')}${r1.rank ? ` (#${r1.rank})` : ''}</span>
         <span><span class="lbl">TG</span>${rt.rating ?? (loading ? '…' : '—')}${rt.rank ? ` (#${rt.rank})` : ''}</span>
-      </div>
-      <div class="meta">${r1.games ?? '?'} games · ${r1.winrate ?? '?'}% wr · streak ${r1.streak ?? '?'}</div>
-      <div class="sect">Top picks (this format, last 60)</div>
-      <div class="civs">${topCivs}</div>
-      <div class="sect">Recent picks (last 20, any format)</div>
-      <div class="civs">${recentCounts}</div>
-      <div class="sect">Last 5 matches</div>
-      <div class="civs">${lastCivs}</div>
-      ${profileLinks(p)}
+      </div>` : ''}
+
+      ${threatHtml}
+
+      ${showFormatBreakdown ? (fmtBuckets.length ? `
+        <div class="sect">ELO performance <span class="sect-sub-note">· from last 40 fetched matches</span></div>
+        <div class="fmt-list">${fmtBuckets.map(b => renderEloRow(b.label, b.stats, b.isCurrent, b.rank)).join('')}</div>
+
+        <div class="sect">Top 5 civ tendencies <span class="sect-sub-note">· from last 40 fetched matches</span></div>
+        <div class="fmt-list">${fmtBuckets.map(b => renderCivRow(b.label, b.stats, b.isCurrent, currentMatchSelfCiv)).join('')}</div>
+      ` : `
+        <div class="sect">ELO performance</div>
+        <div class="sect-empty">${loading ? 'loading…' : 'no recent matches fetched'}</div>
+        <div class="sect">Top 5 civ tendencies</div>
+        <div class="sect-empty">${loading ? 'loading…' : 'no recent matches to analyze'}</div>
+      `) : ''}
+
+      ${(showActivity || showLastMatches || showProfileLink) ? `
+        <div class="sect">Activity (any format)</div>
+        ${(activityStr || (showLastMatches && (p.matches || []).length))
+          ? `<div class="activity-line">${activityStr}${dropsStr}</div>
+             ${showLastMatches && (p.matches || []).length ? `<div class="sect-sub">Recent matches</div><div class="civs">${lastCivs}</div>` : ''}`
+          : `<div class="sect-empty">no recent activity</div>`}
+      ` : ''}
+
+      ${showProfileLink ? profileLinks(p) : ''}
     </div>
   `;
 }
@@ -134,10 +821,20 @@ function getSelf(snap) {
   return snap?.self_ || snap?.self || (snap?.players || []).find(p => p.isSelf) || null;
 }
 
+let currentMatchFormat = null; // short label like '1v1 RM' for current match
+let currentMatchMap = null;
+let currentMatchSelfCiv = null;
 function renderPlayers(snap) {
   const players = snap.players || [];
   const opponents = players.filter(p => !p.isSelf);
   const self = getSelf(snap);
+  currentMatchMap = snap?.map || null;
+  currentMatchSelfCiv = self?.civ || null;
+  currentMatchFormat = null;
+  for (const p of players) {
+    const first = (p.matches || [])[0];
+    if (first?.leaderboard) { currentMatchFormat = leaderboardShort(first.leaderboard); break; }
+  }
 
   if (!opponents.length) { renderEmpty('No opponents parsed.'); return; }
 
@@ -148,6 +845,7 @@ function renderPlayers(snap) {
 }
 
 function upsertPlayer(player) {
+  if (!currentSnap) return;
   const self = getSelf(currentSnap);
   const isAlly = self && self.team && player.team === self.team;
   if (player.isSelf) {
@@ -215,6 +913,7 @@ async function refresh() {
     const live = snap.inMatch ? 'LIVE' : 'LAST';
     setStatus(`${live} · ${tag} ${when}`);
     document.body.classList.toggle('last-match', !snap.inMatch);
+    updatePostMatchCard(snap);
     if (!snap.cached) renderPlayers(snap);
     else if (!document.querySelector('.card')) renderPlayers(snap);
     currentSnap = snap;
@@ -259,14 +958,105 @@ document.addEventListener('click', (e) => {
   window.api.openExternal(href);
 });
 
+function updatePostMatchCard(snap) {
+  const card = document.getElementById('postmatchCard');
+  if (!card) return;
+  const showIt = settings.postMatchCard && snap && !snap.inMatch && (snap.players || []).length > 0;
+  if (!showIt) { card.setAttribute('hidden', ''); return; }
+  card.removeAttribute('hidden');
+  const selfLink = document.getElementById('pmSelfLink');
+  const selfWrap = document.getElementById('pmSelfWrap');
+  const self = getSelf(snap);
+  if (selfLink && selfWrap && self?.profileId && snap.matchId) {
+    selfLink.href = `https://www.aoe2companion.com/matches/${encodeURIComponent(snap.matchId)}`;
+    selfLink.textContent = 'View this match';
+    selfWrap.removeAttribute('hidden');
+  } else if (selfLink && selfWrap && self?.profileId) {
+    selfLink.href = `https://www.aoe2companion.com/players/${encodeURIComponent(self.profileId)}`;
+    selfLink.textContent = 'View your profile';
+    selfWrap.removeAttribute('hidden');
+  } else if (selfWrap) {
+    selfWrap.setAttribute('hidden', '');
+  }
+}
+
+let currentMode = 'full';
 window.api.onMode((m) => {
-  document.body.classList.toggle('pill', m === 'pill');
+  const prev = currentMode;
+  currentMode = m;
+  document.body.classList.toggle('compact', m === 'compact');
+  if (m === 'compact') {
+    startCompactObserver();
+    scheduleCompactResize();
+  } else {
+    stopCompactObserver();
+    lastCompactH = 0;
+  }
+  // Force re-render when mode changes so cards use mode-specific settings
+  // and any DOM bits hidden in the previous mode reappear cleanly.
+  if (prev !== m) {
+    const opps = (currentSnap?.players || []).filter(p => !p.isSelf);
+    window.log?.info?.('mode-change', `[LOCAL] ${prev} → ${m} · re-render with ${opps.length} opps · snap=${currentSnap ? 'present' : 'null'}`);
+    if (opps.length) {
+      setTimeout(() => renderPlayers(currentSnap), 0);
+    }
+  }
 });
+
+// Auto-resize disabled — too fragile. Cards mutate during enrichment and the
+// resize observer feedback-looped. Compact mode now uses a fixed size with
+// internal scroll for overflow. User can manually drag-resize if they want.
+function scheduleCompactResize() {}
+function startCompactObserver() {}
+function stopCompactObserver() {}
+
+// Shrink countdown — backend emits secs remaining; 0 = cancelled/done.
+let countdownRemain = 0;
+let countdownTickTimer = null;
+if (window.__TAURI__?.event) {
+  window.__TAURI__.event.listen('shrink-countdown', (e) => {
+    countdownRemain = Number(e.payload) || 0;
+    renderShrinkCountdown();
+    clearInterval(countdownTickTimer);
+    if (countdownRemain > 0) {
+      countdownTickTimer = setInterval(() => {
+        countdownRemain = Math.max(0, countdownRemain - 1);
+        renderShrinkCountdown();
+        if (countdownRemain === 0) clearInterval(countdownTickTimer);
+      }, 1000);
+    }
+  });
+}
+function renderShrinkCountdown() {
+  let el = document.getElementById('shrinkCountdown');
+  if (countdownRemain <= 0) {
+    if (el) el.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'shrinkCountdown';
+    el.className = 'shrink-countdown';
+    el.title = 'Click to keep full';
+    el.onclick = () => {
+      window.api.setMode('full');
+      countdownRemain = 0;
+      clearInterval(countdownTickTimer);
+      renderShrinkCountdown();
+    };
+    // Insert above the footers so it sits between players list and attrib bar.
+    const app = document.getElementById('app');
+    const attrib = app.querySelector('.attrib');
+    if (attrib) app.insertBefore(el, attrib);
+    else app.appendChild(el);
+  }
+  el.textContent = `Shrinking to compact in ${countdownRemain}s · click to keep full`;
+}
 
 const bind = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
 bind('refresh', refresh);
 bind('expand', () => window.api.setMode('full'));
-bind('collapse', () => window.api.setMode('pill'));
+bind('collapse', () => window.api.setMode('compact'));
 bind('quit', () => window.api.quit());
 
 (function setupHelp() {
@@ -283,19 +1073,158 @@ bind('quit', () => window.api.quit());
   modal.addEventListener('click', e => { if (e.target === modal) close(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !modal.hasAttribute('hidden')) close(); });
   if (openLogBtn) openLogBtn.onclick = () => window.api.openLogFolder();
-  window.api.getVersion?.().then(v => { if (versionEl && v) versionEl.textContent = 'v' + v; }).catch(()=>{});
+  window.api.getVersion?.().then(v => { if (versionEl && v) versionEl.textContent = 'v' + v; }).catch(e => window.log.warn('help-modal', `[LOCAL] getVersion failed: ${e}`));
 })();
+const openLogLink = document.getElementById('openLogLink');
+if (openLogLink) openLogLink.onclick = e => { e.preventDefault(); window.api.openLogFolder(); };
 window.api.onRefresh(refresh);
+
+// --- Settings modal ---
+(function setupSettings() {
+  const modal = document.getElementById('settingsModal');
+  const openBtn = document.getElementById('settings');
+  const closeBtn = document.getElementById('settingsClose');
+  const body = document.getElementById('settingsBody');
+  const resetBtn = document.getElementById('settingsReset');
+  if (!modal || !body) return;
+
+  function renderTable() {
+    body.innerHTML = SETTING_SECTIONS.map(s => `
+      <tr>
+        <td>${s.label}</td>
+        <td><input type="checkbox" data-mode="full" data-key="${s.key}" ${settings.full[s.key] ? 'checked' : ''}></td>
+        <td><input type="checkbox" data-mode="compact" data-key="${s.key}" ${settings.compact[s.key] ? 'checked' : ''}></td>
+      </tr>
+    `).join('');
+    document.querySelectorAll('input[data-other="postMatchCard"]').forEach(el => {
+      el.checked = !!settings.postMatchCard;
+    });
+  }
+
+  body.addEventListener('change', (e) => {
+    const el = e.target;
+    if (el.tagName !== 'INPUT') return;
+    const mode = el.dataset.mode;
+    const key = el.dataset.key;
+    if (!mode || !key) return;
+    settings[mode][key] = el.checked;
+    saveSettings();
+    rerenderForSettings();
+  });
+  modal.addEventListener('change', (e) => {
+    const el = e.target;
+    if (el.dataset?.other === 'postMatchCard') {
+      settings.postMatchCard = el.checked;
+      saveSettings();
+      updatePostMatchCard(currentSnap);
+    }
+  });
+
+  function rerenderForSettings() {
+    if (currentSnap?.players?.length) renderPlayers(currentSnap);
+    scheduleCompactResize();
+  }
+
+  function open() { renderTable(); modal.removeAttribute('hidden'); }
+  function close() { modal.setAttribute('hidden', ''); }
+  if (openBtn) openBtn.onclick = open;
+  if (closeBtn) closeBtn.onclick = close;
+  modal.addEventListener('click', e => { if (e.target === modal) close(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !modal.hasAttribute('hidden')) close(); });
+  if (resetBtn) resetBtn.onclick = () => {
+    settings = structuredClone(DEFAULT_SETTINGS);
+    saveSettings();
+    renderTable();
+    rerenderForSettings();
+  };
+})();
+
+// Mode-change re-render handled in the single onMode handler above.
 
 window.api.getVersion().then(v => {
   const el = document.getElementById('appVersion');
   if (el && v) el.textContent = 'v' + v;
-}).catch(() => {});
+  if (v) checkForUpdate(v);
+}).catch(e => window.log.warn('footer-version', `[LOCAL] getVersion failed: ${e}`));
 
-const POLL_IDLE_MS = 10_000;
+// Compare semver-ish "x.y.z" strings. Returns >0 if a > b, <0 if a < b, 0 equal.
+function semverCmp(a, b) {
+  const pa = String(a).replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
+  const pb = String(b).replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d;
+  }
+  return 0;
+}
+
+async function checkForUpdate(currentVersion) {
+  // Suppress for 6h after user dismisses a specific version banner.
+  const dismissed = JSON.parse(localStorage.getItem('updateDismissed') || '{}');
+  try {
+    window.log.info('update-check', '[WEB] GET api.github.com/repos/aliencoded/aoe2-stats-overlay-rust/releases/latest');
+    const r = await fetch('https://api.github.com/repos/aliencoded/aoe2-stats-overlay-rust/releases/latest', {
+      headers: { 'Accept': 'application/vnd.github+json' },
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    const latest = (data.tag_name || '').replace(/^v/, '');
+    if (!latest) return;
+    if (semverCmp(latest, currentVersion) <= 0) return;
+    if (dismissed[latest] && Date.now() - dismissed[latest] < 6 * 60 * 60 * 1000) return;
+
+    const banner = document.getElementById('updateBanner');
+    const text = banner.querySelector('.update-text');
+    const link = document.getElementById('updateLink');
+    const close = document.getElementById('updateClose');
+    text.textContent = `Update available: v${latest} (you have v${currentVersion})`;
+    link.href = data.html_url || `https://github.com/aliencoded/aoe2-stats-overlay-rust/releases/latest`;
+    close.onclick = () => {
+      banner.setAttribute('hidden', '');
+      dismissed[latest] = Date.now();
+      localStorage.setItem('updateDismissed', JSON.stringify(dismissed));
+    };
+    banner.removeAttribute('hidden');
+  } catch (e) {
+    window.log.warn('update-check', `[WEB] GitHub API unreachable: ${e?.message || e}`);
+  }
+}
+
+// Idle = hunting for a new match. Heaviest by far (always-on).
+// 90s default keeps background load minimal. User short-circuits with the
+// "Check now" button (appears 10s after last poll) when they've just queued.
+const POLL_IDLE_MS = 90_000;
 const POLL_LIVE_MS = 45_000;
 const POLL_LAST_MS = 60_000;
+const CHECK_NOW_DELAY_MS = 10_000;
 let lastSnap = null;
+
+let checkNowTimer = null;
+function scheduleCheckNowReveal(delayMs) {
+  clearTimeout(checkNowTimer);
+  hideCheckNow();
+  checkNowTimer = setTimeout(() => {
+    // Only show in idle mode (no live/past match displayed).
+    const idle = !lastSnap || !(lastSnap.inMatch || (lastSnap.players || []).length);
+    if (idle) showCheckNow();
+  }, delayMs);
+}
+function showCheckNow() {
+  const btn = document.getElementById('checkNowBtn');
+  if (btn) btn.removeAttribute('hidden');
+}
+function hideCheckNow() {
+  const btn = document.getElementById('checkNowBtn');
+  if (btn) btn.setAttribute('hidden', '');
+}
+(function wireCheckNow() {
+  const btn = document.getElementById('checkNowBtn');
+  if (btn) btn.onclick = async () => {
+    hideCheckNow();
+    clearTimeout(timer);
+    await refreshAndReschedule();
+  };
+})();
 
 async function refreshAndReschedule() {
   lastSnap = await refresh();
@@ -303,14 +1232,15 @@ async function refreshAndReschedule() {
   const isLast = !!(lastSnap && !lastSnap.inMatch && lastSnap.players && lastSnap.players.length);
   const next = isLive ? POLL_LIVE_MS : isLast ? POLL_LAST_MS : POLL_IDLE_MS;
   nextRefreshAt = Date.now() + next;
+  clearTimeout(timer);
   timer = setTimeout(refreshAndReschedule, next);
+  // Show "Check now" button after CHECK_NOW_DELAY_MS only if still idle.
+  if (!isLive && !isLast) scheduleCheckNowReveal(CHECK_NOW_DELAY_MS);
+  else hideCheckNow();
 }
 
 scheduleCountdown();
 
-(async () => {
-  lastSnap = await refresh();
-  const next = (lastSnap && lastSnap.inMatch) ? POLL_LIVE_MS : POLL_IDLE_MS;
-  nextRefreshAt = Date.now() + next;
-  timer = setTimeout(refreshAndReschedule, next);
-})();
+// Boot via refreshAndReschedule so check-now reveal scheduling fires on
+// the very first idle cycle, not only on the second poll onwards.
+refreshAndReschedule();

@@ -38,6 +38,6 @@ jobs:
           draft: true
           generate_release_notes: true
           files: |
-            src-tauri/target/release/aoe2-stats-overlay.exe
+            src-tauri/target/release/aoe2-insta-scout.exe
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/nsis/*-setup.exe

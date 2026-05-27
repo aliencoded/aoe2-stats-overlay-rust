@@ -41,6 +41,6 @@ pub fn init(app_data_dir: PathBuf) -> anyhow::Result<LogState> {
         .with(file_layer)
         .init();
 
-    tracing::info!(pid = std::process::id(), "boot");
+    tracing::info!(pid = std::process::id(), "[LOCAL] boot");
     Ok(LogState { file_path, _guard: guard })
 }

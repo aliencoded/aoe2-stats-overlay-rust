@@ -2,25 +2,44 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>AoE2 Stats Overlay</title>
+  <title>AoE2 Insta Scout</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div id="app">
     <header class="bar">
-      <span class="title">AoE2 Stats</span>
+      <div class="title-brand">
+        <span class="brand-text">INSTA</span>
+        <img class="title-icon" src="assets/scout-icon.png" alt="Insta Scout" />
+      </div>
       <span id="status" class="status">…</span>
       <button id="refresh" title="Ctrl+Shift+R">↻</button>
-      <button id="collapse" title="Collapse to pill">⤡</button>
+      <button id="collapse" title="Collapse to compact view">⤡</button>
       <button id="expand" title="Expand to full">⤢</button>
+      <button id="settings" title="Settings — pick what to show">⚙</button>
       <button id="help" title="Help, hotkeys, log location">?</button>
       <button id="quit" title="Quit">×</button>
     </header>
+    <div id="updateBanner" class="update-banner" hidden>
+      <span class="update-text"></span>
+      <a class="update-link" id="updateLink" href="#" target="_blank" rel="noopener noreferrer">Download</a>
+      <button class="update-close" id="updateClose" title="Dismiss">×</button>
+    </div>
     <div id="players"></div>
+    <button id="checkNowBtn" class="check-now-btn" hidden>
+      Just queued? <strong>Check now</strong>
+    </button>
+    <div id="postmatchCard" class="postmatch-card" hidden>
+      <div class="pm-title">Match over</div>
+      <div class="pm-body">
+        <span id="pmSelfWrap" hidden><a id="pmSelfLink" href="#" target="_blank" rel="noopener noreferrer">View this match</a> to see full stats and breakdown.</span>
+      </div>
+    </div>
     <footer class="attrib">
       Data:
       <a href="https://www.aoe2companion.com/" target="_blank" rel="noopener noreferrer">aoe2companion.com</a>
       · <a href="https://www.linkedin.com/in/aliencoded/" target="_blank" rel="noopener noreferrer">contact dev</a>
+      · <a href="#" id="openLogLink" title="Open log folder">logs</a>
       · <span id="appVersion" class="appver">v-</span>
     </footer>
     <footer class="hint">Ctrl+Shift+S hide · Ctrl+Shift+R refresh · Ctrl+Shift+C click-through</footer>
@@ -29,12 +48,12 @@
   <div id="helpModal" class="help-modal" hidden>
     <div class="help-card">
       <button id="helpClose" class="help-close" aria-label="Close">×</button>
-      <h2>AoE2 Opponent Stats Overlay</h2>
+      <h2>AoE2 Insta Scout</h2>
       <p class="help-version"><span id="helpVersion">v-</span> · MIT licensed</p>
 
       <h3>Hotkeys</h3>
       <ul class="help-keys">
-        <li><kbd>Ctrl+Shift+S</kbd> Toggle full ↔ pill</li>
+        <li><kbd>Ctrl+Shift+S</kbd> Toggle full ↔ compact</li>
         <li><kbd>Ctrl+Shift+R</kbd> Force refresh (clears cache)</li>
         <li><kbd>Ctrl+Shift+C</kbd> Toggle click-through (lets clicks pass to game)</li>
       </ul>
@@ -56,6 +75,28 @@
         <li><strong>Overlay won't respond to clicks?</strong> Click-through is on. Press Ctrl+Shift+C.</li>
         <li><strong>Wrong Steam account?</strong> Restart the overlay after switching accounts.</li>
       </ul>
+    </div>
+  </div>
+  <div id="settingsModal" class="help-modal" hidden>
+    <div class="help-card settings-card">
+      <button id="settingsClose" class="help-close" aria-label="Close">×</button>
+      <h2>Display settings</h2>
+      <p class="help-version">Pick what each opponent card shows in each mode.</p>
+      <div class="settings-table-wrap">
+        <table class="settings-table">
+          <thead>
+            <tr><th>Section</th><th>Full</th><th>Compact</th></tr>
+          </thead>
+          <tbody id="settingsBody"></tbody>
+        </table>
+      </div>
+      <h3>Other</h3>
+      <ul class="settings-other">
+        <li><label><input type="checkbox" data-other="postMatchCard"> Show post-match "support aoe2companion" card</label></li>
+      </ul>
+      <div class="settings-actions">
+        <button id="settingsReset" class="help-btn">Reset to defaults</button>
+      </div>
     </div>
   </div>
   <script src="main.js"></script>

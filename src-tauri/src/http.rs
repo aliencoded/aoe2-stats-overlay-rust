@@ -23,7 +23,7 @@ static CLIENT: Lazy<Client> = Lazy::new(|| {
 
 pub async fn get_json<T: DeserializeOwned>(url: &str) -> Result<T> {
     let t0 = Instant::now();
-    tracing::info!(target: "http", "GET {}", url);
+    tracing::info!(target: "http", "[WEB] GET {}", url);
     let r = CLIENT
         .get(url)
         .header(USER_AGENT, UA)
@@ -33,17 +33,17 @@ pub async fn get_json<T: DeserializeOwned>(url: &str) -> Result<T> {
     let status = r.status();
     let dt = t0.elapsed().as_millis();
     if !status.is_success() {
-        tracing::error!(target: "http", "  ↳ {} ({}ms)", status, dt);
+        tracing::error!(target: "http", "[WEB]   ↳ {} ({}ms)", status, dt);
         return Err(anyhow!("GET {} -> {}", url, status));
     }
     let v: T = r.json().await?;
-    tracing::info!(target: "http", "  ↳ {} json ({}ms)", status, dt);
+    tracing::info!(target: "http", "[WEB]   ↳ {} json ({}ms)", status, dt);
     Ok(v)
 }
 
 pub async fn get_text(url: &str) -> Result<String> {
     let t0 = Instant::now();
-    tracing::info!(target: "http", "GET {}", url);
+    tracing::info!(target: "http", "[WEB] GET {}", url);
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static(UA));
     headers.insert(
@@ -63,10 +63,10 @@ pub async fn get_text(url: &str) -> Result<String> {
     let status = r.status();
     let dt = t0.elapsed().as_millis();
     if !status.is_success() {
-        tracing::error!(target: "http", "  ↳ {} ({}ms)", status, dt);
+        tracing::error!(target: "http", "[WEB]   ↳ {} ({}ms)", status, dt);
         return Err(anyhow!("GET {} -> {}", url, status));
     }
     let t = r.text().await?;
-    tracing::info!(target: "http", "  ↳ {} {}b ({}ms)", status, t.len(), dt);
+    tracing::info!(target: "http", "[WEB]   ↳ {} {}b ({}ms)", status, t.len(), dt);
     Ok(t)
 }
