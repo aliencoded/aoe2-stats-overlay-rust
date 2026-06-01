@@ -5,7 +5,7 @@
 
 Instant in-game opponent scouting for **Age of Empires II: Definitive Edition**. Shows your opponent's rating, civ tendencies, likely openings, smurf probability, and session state. Right on top of the game while you play.
 
-![Hero](docs/screenshots/hero-v2.webp)
+![Hero](docs/screenshots/hero-v3.webp)
 
 Project page: https://www.thinkingslightly.com/aoe2-opponent-stats-ui-overlay/
 
@@ -20,9 +20,9 @@ Windows 10/11. Steam version of AoE2DE. SmartScreen will warn — click **More i
 
 ## Screenshots
 
-| Full card | Scout summary detail |
+| Scout summary | Display settings |
 |---|---|
-| ![Full](docs/screenshots/full-card-v2.webp) | ![Scout summary](docs/screenshots/scout-summary.webp) |
+| ![Scout summary](docs/screenshots/scout-summary-v3.webp) | ![Settings](docs/screenshots/settings-v3.webp) |
 
 ## What you get per opponent
 
@@ -48,16 +48,20 @@ Windows 10/11. Steam version of AoE2DE. SmartScreen will warn — click **More i
 - Games today / this week
 - Their last 5 matches: civ, map, ELO change, time ago
 
+**Build advice — PLAN card (1v1)**
+- Predicts their likely opening from civ + map + recent picks, confidence-tagged
+- Counter direction + your recommended opener and a generic dark-age → feudal build order
+- Key units to make, do's / don'ts, and the danger window
+
 Plus your own stats bar above the opponents and a faded "last match" view after the game ends.
 
 ## Hotkeys
 
-- `Ctrl+Shift+S` — toggle full ↔ compact
 - `Ctrl+Shift+R` — force refresh
 - `Ctrl+Shift+C` — toggle click-through (clicks pass to the game)
-- ⚙ gear icon — settings: pick which sections show in each mode, change language
+- ⚙ gear icon — settings: pick which sections show, set background opacity, change language
 
-Auto switches full ↔ compact when you focus / unfocus the game.
+Single always-on-top overlay. On a new match the opponent + plan cards open for 2 min (visible countdown), then the opponent card auto-collapses so the build order stays in focus. Click any card header to expand/collapse it.
 
 ## Languages
 
@@ -78,9 +82,20 @@ English, Español, Deutsch, Français, Italiano, Português (BR), Русский
 
 All stats come from [aoe2companion.com](https://www.aoe2companion.com/).
 
+## Privacy
+
+Your Steam ID is read locally to find your current match; stats are fetched from aoe2companion. An **anonymous, opt-out usage ping** (a random per-install ID + app version only — never your Steam ID, profile, name, or match data) lets install counts be tracked; turn it off in **Settings → Appearance**. With it off, the app talks to GitHub directly for update checks. Full details in [SECURITY.md](SECURITY.md).
+
+## Attribution
+
+- **Stats API** — [aoe2companion.com](https://www.aoe2companion.com/) (maintained by Dennis Keil / denniske).
+- **Build-order icons** — resource, unit, building and gaia icons from [denniske/aoe2companion](https://github.com/denniske/aoe2companion); age icons from [SiegeEngineers/aoe2techtree](https://github.com/SiegeEngineers/aoe2techtree).
+- **Game assets** — Age of Empires II: Definitive Edition icons and civilization names are © Microsoft Corporation. This is an unofficial fan tool, not affiliated with or endorsed by Microsoft.
+- **Build orders & strategy** — generic, community-standard openings and counter heuristics authored for this project; not copied from any specific guide.
+
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) (applies to this project's own code; bundled game icons remain © Microsoft.)
 
 ## Disclaimer
 

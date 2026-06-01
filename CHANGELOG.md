@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented here.
 
+## [0.3.0] - 2026-06-01
+
+### Added
+- **Build advice (PLAN) card** in 1v1: predicts the opponent's likely opening from their civ, the map, and their recent picks, then recommends a counter direction, a generic early-game build order, key units, do's/don'ts, and the danger window — all confidence-tagged ("likely", never certain). Fully offline heuristics.
+- **New-match auto-focus**: on a new 1v1, the opponent + PLAN cards stay open for 2 minutes (visible countdown), then the opponent card auto-collapses so the build order stays in focus. Any manual card click cancels the timer.
+- **All cards collapsible** — click any card header to expand/collapse; hover glow on every card.
+- **Desktop-window mode** (Settings): opaque, resizable, decorated window for a second monitor.
+- **Adjustable overlay opacity** slider in Settings.
+- **Rank percentile** shown alongside ladder rank.
+- **Anonymous, opt-out usage ping** so install counts can be tracked. Sends only a random per-install ID, the app version, and `"win"` — never your Steam ID, profile, name, or match data. Toggle in Settings → Appearance; off by switch and the app talks to GitHub directly. See SECURITY.md.
+- New app icon.
+
+### Changed
+- **Compact / pill mode removed** — one always-on-top overlay; in-game simplification is handled by per-card auto-collapse instead.
+- Settings reorganized: per-section toggles, build-advice part toggles, post-match card toggle, appearance (opacity + desktop window).
+- **Strategy, build-advice, and opening-prediction text is now fully localized** in all 10 languages (previously English-only).
+
+### Fixed
+- **Blank card vs non-Latin opponent names** — opponents with CJK/Cyrillic/other non-Latin names (e.g. `惠惠神獸`) failed to parse from the live-match feed, leaving the card empty. The parser now accepts Unicode names.
+- Settings **"Done"** button now translates.
+
+### Removed
+- `Ctrl+Shift+S` show/hide hotkey (compact mode is gone).
+
 ## [0.2.0] - 2026-05-27
 
 Rebranded from "AoE2 Stats Overlay" to **AoE2 Insta Scout**. Executable renamed to `aoe2-insta-scout.exe`.

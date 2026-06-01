@@ -1,0 +1,13 @@
+name = "insta-scout-telemetry"
+main = "src/worker.js"
+compatibility_date = "2026-01-01"
+
+# After `wrangler d1 create insta-scout-telemetry`, paste the printed
+# database_id below (replace REPLACE_ME).
+[[d1_databases]]
+binding = "DB"
+database_name = "insta-scout-telemetry"
+database_id = "2cb9cdef-df41-4981-9127-49ad9ec2739e"
+
+# STATS_TOKEN is NOT set here — it's a secret. Set it with:
+#   wrangler secret put STATS_TOKEN

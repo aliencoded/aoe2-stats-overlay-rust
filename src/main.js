@@ -24,13 +24,13 @@ window.api = {
   },
   onRefresh: (cb) => listen('refresh', () => cb()),
   onClickThrough: (cb) => listen('click-through', (e) => cb(e.payload)),
-  onMode: (cb) => listen('mode', (e) => cb(e.payload)),
   onMatchPartial: (cb) => listen('match-partial', (e) => cb(e.payload)),
   quit: () => invoke('quit_app'),
-  setMode: (m) => invoke('set_mode', { mode: m }),
+  desktopWindow: (on) => invoke('desktop_window', { on }),
   openExternal: (url) => invoke('open_external', { url }),
   getVersion: () => invoke('app_version'),
   openLogFolder: () => invoke('open_log_folder'),
+  leaderboardTotals: () => invoke('leaderboard_totals'),
 };
 
 // --- Display settings (what's shown per mode) ---
@@ -42,38 +42,52 @@ const SETTING_SECTIONS = [
   { key: 'lastMatches',     labelKey: 'setting_last_matches' },
   { key: 'profileLink',     labelKey: 'setting_profile_link' },
   { key: 'selfBar',         labelKey: 'setting_self_bar' },
+  { key: 'civPie',          labelKey: 'setting_civ_pie' },
+  { key: 'eloTrend',        labelKey: 'setting_elo_trend' },
+  { key: 'mapRecord',       labelKey: 'setting_map_record' },
+  { key: 'streak',          labelKey: 'setting_streak' },
+  { key: 'buildAdvice',     labelKey: 'setting_build_advice' },
+  { key: 'postMatchCard',   labelKey: 'setting_post_match' },
 ];
 const DEFAULT_SETTINGS = {
-  full:    { rating: true, threat: true, formatBreakdown: true, activity: true, lastMatches: true,  profileLink: true,  selfBar: true },
-  compact: { rating: true, threat: true, formatBreakdown: true, activity: true, lastMatches: false, profileLink: true, selfBar: true },
+  // Per-section visibility (single full overlay view; compact mode removed).
+  full:    { rating: true, threat: true, formatBreakdown: true, activity: true, lastMatches: true, profileLink: true, selfBar: true, civPie: true, eloTrend: true, mapRecord: true, streak: true, buildAdvice: true },
   postMatchCard: true,
+  bgAlpha: 30,           // window background opacity 0-100 (30 = light tint, reco)
+  desktopWindow: false,  // opaque resizable window for a dedicated monitor
+  telemetry: true,       // anonymous boot ping (install count only); opt-out via settings
+  // Which parts of the 1v1 build-advice (PLAN) card to show. All on by default.
+  buildParts: { theirPlans: true, yourPlan: true, makeUnits: true, earlyBuild: true, alternates: true, danger: true },
 };
+// Parts of the build-advice card, in display order (for the settings UI).
+const BUILD_PARTS = [
+  { key: 'theirPlans', labelKey: 'bp_their_plans' },
+  { key: 'yourPlan',   labelKey: 'bp_your_plan' },
+  { key: 'makeUnits',  labelKey: 'bp_make_units' },
+  { key: 'earlyBuild', labelKey: 'bp_early_build' },
+  { key: 'alternates', labelKey: 'bp_alternates' },
+  { key: 'danger',     labelKey: 'bp_danger' },
+];
+// True if a build-advice part is enabled (defaults to shown).
+function BP(key) { return settings.buildParts?.[key] !== false; }
 const SETTINGS_KEY = 'displaySettings.v2';
 const SETTINGS_KEY_V1 = 'displaySettings.v1';
 let settings = loadSettings();
 
 function loadSettings() {
   try {
-    let raw = localStorage.getItem(SETTINGS_KEY);
-    // Migrate v1 → v2 (renamed `pill` key to `compact`).
-    if (!raw) {
-      const v1 = localStorage.getItem(SETTINGS_KEY_V1);
-      if (v1) {
-        const old = JSON.parse(v1);
-        raw = JSON.stringify({
-          full: old.full,
-          compact: old.pill,
-          postMatchCard: old.postMatchCard,
-        });
-        localStorage.setItem(SETTINGS_KEY, raw);
-      }
-    }
+    const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return structuredClone(DEFAULT_SETTINGS);
     const parsed = JSON.parse(raw);
     return {
+      // `full` carries the section toggles (compact set, if present from an
+      // older version, is ignored now that there's a single view).
       full: { ...DEFAULT_SETTINGS.full, ...(parsed.full || {}) },
-      compact: { ...DEFAULT_SETTINGS.compact, ...(parsed.compact || parsed.pill || {}) },
       postMatchCard: parsed.postMatchCard ?? DEFAULT_SETTINGS.postMatchCard,
+      bgAlpha: parsed.bgAlpha ?? DEFAULT_SETTINGS.bgAlpha,
+      desktopWindow: parsed.desktopWindow ?? DEFAULT_SETTINGS.desktopWindow,
+      telemetry: parsed.telemetry ?? DEFAULT_SETTINGS.telemetry,
+      buildParts: { ...DEFAULT_SETTINGS.buildParts, ...(parsed.buildParts || {}) },
     };
   } catch (e) {
     window.log?.warn?.('settings', `load failed, using defaults: ${e}`);
@@ -84,9 +98,19 @@ function saveSettings() {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); }
   catch (e) { window.log?.warn?.('settings', `save failed: ${e}`); }
 }
+// Apply window background opacity (0-100 → rgba alpha) live. Module-scoped so it
+// runs both from the settings slider and on boot to honor persisted bgAlpha.
+function applyAppearance() {
+  const a = Math.min(100, Math.max(0, settings.bgAlpha ?? 0)) / 100;
+  document.body.style.background = `rgba(15, 18, 22, ${a})`;
+  document.body.classList.toggle('desktop-window', !!settings.desktopWindow);
+}
+// Boot: apply persisted appearance + restore desktop-window mode if it was on.
+applyAppearance();
+if (settings.desktopWindow) { try { window.api.desktopWindow?.(true); } catch (e) {} }
 function S(key) {
-  // True if section is enabled for the current mode.
-  return !!settings[currentMode]?.[key];
+  // True if a card section is enabled (single full overlay view).
+  return !!settings.full?.[key];
 }
 
 const $players = document.getElementById('players');
@@ -98,13 +122,75 @@ let timer = null;
 let countdownTimer = null;
 let nextRefreshAt = 0;
 let baseStatus = '';
+let selfExpanded = false; // click the self bar to expand a full self card
+let planCollapsed = false; // 1v1 build-advice (PLAN) card collapse state
+const collapsedCards = new Set(); // playerKey() of opponent/ally cards collapsed to header-only
+
+// New-match auto-focus: on a new 1v1 match keep the opponent card + PLAN card
+// expanded for AUTO_FOCUS_SECS (with a visible countdown), then collapse the
+// opponent card so the build order becomes the focus. Cancelled the moment the
+// user manually toggles any card.
+const AUTO_FOCUS_SECS = 120;
+let autoFocusMatchKey = null;
+let autoFocusOppKey = null;
+let autoFocusTimer = null;
+let autoFocusTick = null;
+let autoFocusRemain = 0;
+
+function startAutoFocus(matchKey, oppKey) {
+  stopAutoFocusTimers();
+  autoFocusMatchKey = matchKey;
+  autoFocusOppKey = oppKey;
+  autoFocusRemain = AUTO_FOCUS_SECS;
+  renderAutoFocusCountdown();
+  autoFocusTick = setInterval(() => {
+    autoFocusRemain = Math.max(0, autoFocusRemain - 1);
+    renderAutoFocusCountdown();
+    if (autoFocusRemain === 0) { clearInterval(autoFocusTick); autoFocusTick = null; }
+  }, 1000);
+  autoFocusTimer = setTimeout(collapseOppNow, AUTO_FOCUS_SECS * 1000);
+}
+function collapseOppNow() {
+  if (autoFocusOppKey) {
+    collapsedCards.add(autoFocusOppKey);
+    const card = document.getElementById(autoFocusOppKey);
+    if (card) {
+      card.classList.add('collapsed');
+      const caret = card.querySelector('.card-caret');
+      if (caret) caret.innerHTML = '&#9656;';
+    }
+  }
+  stopAutoFocusTimers();
+}
+// Cancel keeps every card in its current state (just stops the countdown).
+function cancelAutoFocus() { stopAutoFocusTimers(); }
+function stopAutoFocusTimers() {
+  if (autoFocusTimer) { clearTimeout(autoFocusTimer); autoFocusTimer = null; }
+  if (autoFocusTick) { clearInterval(autoFocusTick); autoFocusTick = null; }
+  autoFocusRemain = 0;
+  renderAutoFocusCountdown();
+}
+function renderAutoFocusCountdown() {
+  let el = document.getElementById('autoFocusCountdown');
+  if (autoFocusRemain <= 0) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'autoFocusCountdown';
+    el.className = 'shrink-countdown';
+    el.onclick = collapseOppNow;
+    const app = document.getElementById('app');
+    const attrib = app.querySelector('.attrib');
+    if (attrib) app.insertBefore(el, attrib); else app.appendChild(el);
+  }
+  el.textContent = t('focus_countdown', { n: autoFocusRemain });
+}
 
 function setStatus(s) { baseStatus = s; renderStatusLine(); }
 
 function renderStatusLine() {
   if (nextRefreshAt && Date.now() < nextRefreshAt) {
     const secs = Math.max(0, Math.ceil((nextRefreshAt - Date.now()) / 1000));
-    $status.textContent = `${baseStatus} · next ${secs}s`;
+    $status.textContent = `${baseStatus} · ${t('next_refresh', { n: secs })}`;
   } else {
     $status.textContent = baseStatus;
   }
@@ -117,29 +203,6 @@ function scheduleCountdown() {
 
 function renderEmpty(msg) {
   $players.innerHTML = `<div class="empty">${msg}</div>`;
-}
-
-function renderSelfBar(s) {
-  if (!s) return '';
-  if (!S('selfBar')) return '';
-  const r1 = s.rank1v1 || {}, rt = s.rankTG || {};
-  return `
-    <div class="selfbar">
-      <span class="me">${t('you')}</span>
-      <span class="nm">${escapeHtml(s.name)}</span>
-      ${s.civ ? `<span class="g">[${escapeHtml(localizeCiv(s.civ))}]</span>` : ''}
-      <span class="r">1v1 ${r1.rating ?? '—'}${r1.rank ? `#${r1.rank}` : ''}</span>
-      <span class="r">TG ${rt.rating ?? '—'}${rt.rank ? `#${rt.rank}` : ''}</span>
-      ${selfProfileLinks(s)}
-    </div>`;
-}
-
-function selfProfileLinks(s) {
-  const c = s.profileId;
-  if (!c) return '';
-  return `<span class="profile-links inline">
-    <a href="https://www.aoe2companion.com/players/${encodeURIComponent(c)}" target="_blank" rel="noopener noreferrer">${t('view_on_companion')}</a>
-  </span>`;
 }
 
 // --- Per-format breakdown helpers ---
@@ -357,6 +420,12 @@ const CIV_CHEESE = {
   Sicilian:     null,
 };
 
+// Stable i18n key for a cheese/strat name -> `cz_<slug>` (en table in i18n.js
+// holds the English source; render resolves via t() and falls back to English).
+function cheeseKey(name) {
+  return "cz_" + String(name).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
 function detectSmurf(p) {
   const reasons = [];
   let score = 0;
@@ -526,23 +595,26 @@ function renderThreatSection(p) {
   let durMult = 1.0;
   let durNote = '';
   if (avgWinMin != null) {
-    if (avgWinMin < 13) { durMult = 1.35; durNote = `avg win ${avgWinMin.toFixed(0)}min → very early-aggressive`; }
-    else if (avgWinMin < 18) { durMult = 1.15; durNote = `avg win ${avgWinMin.toFixed(0)}min → early-aggressive`; }
-    else if (avgWinMin > 35) { durMult = 0.7; durNote = `avg win ${avgWinMin.toFixed(0)}min → late-game player`; }
-    else if (avgWinMin > 28) { durMult = 0.85; durNote = `avg win ${avgWinMin.toFixed(0)}min → mid/late game`; }
-    else { durNote = `avg win ${avgWinMin.toFixed(0)}min`; }
+    const n = avgWinMin.toFixed(0);
+    if (avgWinMin < 13) { durMult = 1.35; durNote = t('tz_dur_vearly', { n }); }
+    else if (avgWinMin < 18) { durMult = 1.15; durNote = t('tz_dur_early', { n }); }
+    else if (avgWinMin > 35) { durMult = 0.7; durNote = t('tz_dur_late', { n }); }
+    else if (avgWinMin > 28) { durMult = 0.85; durNote = t('tz_dur_midlate', { n }); }
+    else { durNote = t('tz_dur_avgwin', { n }); }
   } else if (avgAllMin != null) {
-    durNote = `avg game ${avgAllMin.toFixed(0)}min`;
+    durNote = t('tz_dur_avggame', { n: avgAllMin.toFixed(0) });
   }
 
   const famNote = civPlayCount === 0
-    ? `${localizeCiv(civ) || 'civ'}: first pick in recent history`
-    : `${civPlayCount} games this civ${civWR != null ? ` · ${Math.round(civWR*100)}% WR` : ''}`;
+    ? t('tz_fam_first', { civ: localizeCiv(civ) || 'civ' })
+    : t('tz_fam_games', { n: civPlayCount }) + (civWR != null ? t('tz_fam_wr', { pct: Math.round(civWR*100) }) : '');
   const tagNote = [famNote, durNote].filter(Boolean).join(' · ');
   const cheeseTags = cheeses.map(c => {
     const base = sevPct[c.sev] ?? 30;
     const pct = Math.max(5, Math.min(95, Math.round(base * famMult * wrMult * durMult)));
-    return `<span class="threat-tag cheese-${c.sev}" title="${escapeHtml(tagNote || t('tip_opening'))}">${escapeHtml(c.name)} ${pct}%</span>`;
+    const ck = cheeseKey(c.name);
+    const cname = t(ck);
+    return `<span class="threat-tag cheese-${c.sev}" title="${escapeHtml(tagNote || t('tip_opening'))}">${escapeHtml(cname === ck ? c.name : cname)} ${pct}%</span>`;
   }).join('');
   return `
     <div class="sect">${t('scout_summary')} <span class="sect-sub-note">· ${t('scout_sub')}</span></div>
@@ -570,12 +642,12 @@ function renderEloRow(label, st, isCurrent, rank) {
     m.won === false ? '<span class="wl l">L</span>' :
     '<span class="wl">·</span>'
   ).join('');
-  const trendStr = (st.trendSeries && st.trendSeries.length >= 2)
+  const trendStr = (S('eloTrend') && st.trendSeries && st.trendSeries.length >= 2)
     ? `<span class="trend-block"><span class="g">${t('trend')}</span> ${sparkline(st.trendSeries)} ${st.trend != null ? `<span class="trend ${st.trend > 0 ? 'trend-up' : st.trend < 0 ? 'trend-down' : 'trend-flat'}" title="${escapeHtml(t('tip_net_elo'))}">${st.trend > 0 ? '+' : ''}${st.trend}</span>` : ''}</span>`
     : '';
   const rangeStr = (st.ratingMin != null && st.ratingMax != null)
     ? `<span class="g">${t('range')}</span> ${st.ratingMin}–${st.ratingMax}` : '';
-  const mapStr = (st.mapStats && currentMatchMap)
+  const mapStr = (S('mapRecord') && st.mapStats && currentMatchMap)
     ? `<span class="g">${t('on_map', { map: escapeHtml(currentMatchMap) })}</span> <strong>${st.mapStats.wins}W-${st.mapStats.games - st.mapStats.wins}L</strong>` : '';
   let streakBadge = '';
   if (rank && rank.streak != null) {
@@ -599,7 +671,7 @@ function renderEloRow(label, st, isCurrent, rank) {
       </div>
       <div class="fmt-row fmt-sub">
         ${rangeStr}
-        ${(streakBadge || wlSeq) ? `<span class="g">${t('recent_short')}</span> ${streakBadge} <span class="fmt-wl">${wlSeq}</span>` : ''}
+        ${(S('streak') && (streakBadge || wlSeq)) ? `<span class="g">${t('recent_short')}</span> ${streakBadge} <span class="fmt-wl">${wlSeq}</span>` : ''}
         ${mapStr}
       </div>
     </div>`;
@@ -636,9 +708,10 @@ function renderCivRow(label, st, isCurrent, selfCiv) {
   const mirror = selfCiv && st.topCiv && st.topCiv[0].toLowerCase() === selfCiv.toLowerCase()
     ? `<span class="mirror-alert">${t('mirror_alert', { civ: escapeHtml(localizeCiv(selfCiv)) })}</span>` : '';
 
-  // SVG pie chart of civ distribution (top 5 + "others").
+  // SVG pie chart of civ distribution (top 5 + "others"). Toggleable — off
+  // leaves just the text tendency list above.
   let chart = '';
-  if (totalCivGames > 0) {
+  if (S('civPie') && totalCivGames > 0) {
     const palette = ['#e57373', '#64b5f6', '#81c784', '#ffb74d', '#ba68c8'];
     const shown = topCivs.slice(0, 5);
     const shownGames = shown.reduce((a, c) => a + (c.games || 0), 0) || 1;
@@ -679,7 +752,7 @@ function renderCivRow(label, st, isCurrent, selfCiv) {
     <div class="fmt ${isCurrent ? 'fmt-current' : ''}">
       <div class="fmt-row">
         <span class="fmt-label">${escapeHtml(label)}</span>
-        <span class="fmt-window-count g" title="Of the last 40 fetched matches">${st.games} recent · <strong>${st.wr}%</strong> WR (${st.wins}W-${st.games - st.wins}L)</span>
+        <span class="fmt-window-count g" title="${escapeHtml(t('tip_window40'))}">${st.games} recent · <strong>${st.wr}%</strong> WR (${st.wins}W-${st.games - st.wins}L)</span>
         <span class="civ-tend-group">${tendencyTag}${bestStr}</span>
         ${poolStr}
         ${mirror}
@@ -736,6 +809,16 @@ function playerKey(p) {
   return `card-${(p.profileId || p.name || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
 }
 
+// Total players per RM ladder (rm_1v1 / rm_team), fetched once at boot. Lets us
+// show a rank as a percentile (top X%) next to the rank number.
+let ladderTotals = { rm_1v1: null, rm_team: null };
+function rankPctSuffix(rank, total) {
+  if (!rank || !total) return '';
+  const pct = (rank / total) * 100;
+  const s = pct < 1 ? pct.toFixed(1) : Math.round(pct);
+  return ` · top ${s}%`;
+}
+
 function cardHtml(p, isAlly) {
   const r1 = p.rank1v1 || {};
   const rt = p.rankTG || {};
@@ -753,13 +836,21 @@ function cardHtml(p, isAlly) {
     return `<div class="civ"><span><span class="wl ${cls}">${wl}</span> <span class="fmt-tag ${fmtCls}">${escapeHtml(fmt)}</span> ${escapeHtml(localizeCiv(m.civ) || '?')}</span><span class="g">${escapeHtml(m.map || '')} ${diff}${when ? ` · ${when}` : ''}</span></div>`;
   }).join('') || `<div class="civ">${loading ? placeholder(t('loading')) : placeholder(t('no_recent_matches'))}</div>`;
 
-  const roleCls = isAlly ? 'ally' : 'opp';
-  const roleLabel = isAlly ? t('role_ally') : t('role_opp');
+  const roleCls = p.isSelf ? 'self' : isAlly ? 'ally' : 'opp';
+  const roleLabel = p.isSelf ? t('you') : isAlly ? t('role_ally') : t('role_opp');
   const loadCls = loading ? ' card-loading' : '';
+  // All cards (self + opponents) collapse to a one-line header (name + civ +
+  // ratings). Self uses the selfExpanded flag; others use collapsedCards.
+  const collapsible = true;
+  const collapsed = p.isSelf ? !selfExpanded : collapsedCards.has(playerKey(p));
+  const collapsedCls = collapsed ? ' collapsed' : '';
+  const caret = collapsible
+    ? `<span class="card-caret" title="${escapeHtml(t('toggle_card') !== 'toggle_card' ? t('toggle_card') : 'Show / hide details')}">${collapsed ? '&#9656;' : '&#9662;'}</span>`
+    : '';
   const showRating = S('rating');
   const showActivity = S('activity') && (p.games24h != null || p.games7d != null);
   const showFormatBreakdown = S('formatBreakdown') && (p.matches || []).length > 0;
-  const showThreat = S('threat') && !isAlly && !p.isSelf;
+  const showThreat = S('threat') && !isAlly;
   const threatHtml = showThreat ? renderThreatSection(p) : '';
   const showLastMatches = S('lastMatches');
   const showProfileLink = S('profileLink');
@@ -774,11 +865,11 @@ function cardHtml(p, isAlly) {
   const dropsStr = '';
 
   return `
-    <div class="card card-${roleCls}${loadCls}" id="${playerKey(p)}">
-      <div class="name"><span class="role ${roleCls}">${roleLabel}</span> ${escapeHtml(p.name)} ${p.civ ? `<span class="g">[${escapeHtml(localizeCiv(p.civ))}]</span>` : ''}</div>
+    <div class="card card-${roleCls}${loadCls}${collapsedCls}" id="${playerKey(p)}">
+      <div class="name"><span class="role ${roleCls}">${roleLabel}</span> ${escapeHtml(p.name)} ${p.civ ? `<span class="g">[${escapeHtml(localizeCiv(p.civ))}]</span>` : ''}${caret}</div>
       ${showRating ? `<div class="ratings">
-        <span><span class="lbl">1v1</span>${r1.rating ?? (loading ? '…' : '—')}${r1.rank ? ` (#${r1.rank})` : ''}</span>
-        <span><span class="lbl">TG</span>${rt.rating ?? (loading ? '…' : '—')}${rt.rank ? ` (#${rt.rank})` : ''}</span>
+        <span><span class="lbl">1v1</span>${r1.rating ?? (loading ? '…' : '—')}${r1.rank ? ` (#${r1.rank}${rankPctSuffix(r1.rank, ladderTotals.rm_1v1)})` : ''}</span>
+        <span><span class="lbl">TG</span>${rt.rating ?? (loading ? '…' : '—')}${rt.rank ? ` (#${rt.rank}${rankPctSuffix(rt.rank, ladderTotals.rm_team)})` : ''}</span>
       </div>` : ''}
 
       ${threatHtml}
@@ -817,6 +908,85 @@ function profileLinks(p) {
   </div>`;
 }
 
+// Build / counter recommendation — a standalone card shown in 1v1 only,
+// toggled via the buildAdvice setting. Heuristic + offline (see strategy.js).
+// Confidence-tagged: "likely", never certain. `opp` is the single opponent.
+function buildAdviceCardHtml(opp) {
+  if (!window.strategy) return '';
+  const adv = window.strategy.buildAdvice(
+    currentMatchSelfCiv,
+    { civ: opp.civ, matches: opp.matches },
+    currentMatchMap
+  );
+  if (!adv) return '';
+
+  // Danger window from the existing CIV_PHASE knowledge.
+  const phase = civPhase(opp.civ);
+  const danger = phase === 'early'
+    ? t('ba_danger_early')
+    : phase === 'late'
+      ? t('ba_danger_late')
+      : t('ba_danger_even');
+
+  const icon = (k) => `<img class="ba-ico" src="assets/icons/${k}.png" alt="" draggable="false">`;
+  const confCls = `conf-${adv.their.confidence}`;
+  const reasons = adv.their.reasons.map(r => `<span class="ba-chip">${escapeHtml(r)}</span>`).join('');
+  // Secondary / tertiary likely plans, each with a brief counter.
+  const altPlans = (adv.their.plans || []).slice(1).map(p => `
+    <div class="ba-alt"><span class="ba-k">${t('ba_also')}</span>
+      <span class="ba-plan2">${escapeHtml(p.planLabel)}</span>
+      <span class="ba-conf conf-${p.confidence}">${p.confidence}</span>
+      <span class="ba-alt-c">→ ${escapeHtml(p.counter.text)} ${(p.counter.units || []).map(icon).join('')}</span>
+    </div>`).join('');
+  const steps = adv.build.darkAge.map(s => `<li>${icon(s.icon)}${escapeHtml(s.text)}</li>`).join('');
+  const dos = adv.your.dos.map(d => `<li>${escapeHtml(d)}</li>`).join('');
+  const donts = adv.your.donts.map(d => `<li>${escapeHtml(d)}</li>`).join('');
+  const selfCivName = escapeHtml(localizeCiv(adv.your.civ) || adv.your.civ);
+  const oppCivName = escapeHtml(localizeCiv(adv.their.civ) || adv.their.civ);
+
+  const caret = `<span class="card-caret" title="${escapeHtml(t('toggle_card'))}">${planCollapsed ? '&#9656;' : '&#9662;'}</span>`;
+  return `
+    <div class="card card-build${planCollapsed ? ' collapsed' : ''}" id="build-advice-card">
+      <div class="name"><span class="role build">${t('ba_plan_title')}</span> ${selfCivName} <span class="g">${t('ba_vs')}</span> ${oppCivName}
+        <span class="sect-sub-note">· ${t('ba_subtitle')}</span>${caret}</div>
+
+      <div class="build-card">
+        ${BP('theirPlans') ? `
+        <div class="ba-line"><span class="ba-k">${t('ba_likely')}</span>
+          <span class="ba-plan">${escapeHtml(adv.their.planLabel)}</span>
+          <span class="ba-conf ${confCls}">${adv.their.confidence}</span>
+        </div>
+        <div class="ba-chips">${reasons}</div>
+        ${altPlans}` : ''}
+
+        ${BP('yourPlan') ? `
+        <div class="ba-line"><span class="ba-k">${t('ba_your_plan')}</span>
+          <span class="ba-civ">${selfCivName}</span>
+          <span class="ba-opener">${escapeHtml(adv.build.opener)}</span>
+        </div>
+        <div class="ba-advice">${escapeHtml(adv.your.plan)}</div>` : ''}
+        ${(BP('makeUnits') && adv.your.keyUnits && adv.your.keyUnits.length) ? `<div class="ba-make"><span class="ba-k">${t('ba_make')}</span> ${adv.your.keyUnits.map(u => icon(u)).join('')}</div>` : ''}
+        ${BP('yourPlan') ? `
+        <div class="ba-cols">
+          <div class="ba-do"><div class="ba-h">${t('ba_do')}</div><ul>${dos}</ul></div>
+          <div class="ba-dont"><div class="ba-h">${t('ba_avoid')}</div><ul>${donts}</ul></div>
+        </div>` : ''}
+
+        ${BP('earlyBuild') ? `
+        <div class="ba-sub">${t('ba_early_build')} <b>${escapeHtml(adv.build.opener)}</b></div>
+        <ol class="ba-build">${steps}</ol>
+        <div class="ba-feudal">${icon(adv.build.feudal.icon)}${escapeHtml(adv.build.feudal.text)}</div>` : ''}
+        ${(BP('alternates') && adv.your.builds && adv.your.builds.length > 1) ? `
+          <div class="ba-sub">${t('ba_alternates')}</div>
+          ${adv.your.builds.slice(1).map(b => `<div class="ba-altbuild">${icon(b.feudal.icon)}<b>${escapeHtml(b.opener)}</b> <span class="ba-altb-why">— ${escapeHtml(b.why)}</span><div class="ba-altb-feudal">${escapeHtml(b.feudal.text)}</div></div>`).join('')}
+        ` : ''}
+
+        ${BP('danger') ? `<div class="ba-danger"><span class="ba-k">${t('ba_danger')}</span> ${escapeHtml(danger)}</div>` : ''}
+      </div>
+    </div>
+  `;
+}
+
 function getSelf(snap) {
   return snap?.self_ || snap?.self || (snap?.players || []).find(p => p.isSelf) || null;
 }
@@ -839,9 +1009,28 @@ function renderPlayers(snap) {
   if (!opponents.length) { renderEmpty(t('empty_no_opps')); return; }
 
   const selfTeam = self?.team || null;
-  const selfHtml = renderSelfBar(self);
+  const show1v1 = !!(currentMatchFormat && currentMatchFormat.startsWith('1v1'));
+  const showBuild = show1v1 && S('buildAdvice') && opponents.length === 1
+    && opponents[0].civ && currentMatchSelfCiv;
+
+  // New 1v1 match → keep the opponent card + PLAN card expanded, then collapse
+  // the opponent after a visible countdown so the build order is the focus.
+  const matchKey = snap?.matchId || snap?.pseudoId || null;
+  const oppKey = (showBuild && opponents.length === 1) ? playerKey(opponents[0]) : null;
+  const isNewFocus = showBuild && matchKey && matchKey !== autoFocusMatchKey;
+  if (isNewFocus) {
+    planCollapsed = false;
+    if (oppKey) collapsedCards.delete(oppKey); // ensure opponent starts expanded
+  }
+
+  // Self renders as a collapsible card (same layout as opponents), collapsed by
+  // default to a one-line header. Sits first, above opponents + build card.
+  const selfHtml = (self && S('selfBar')) ? cardHtml(self, false) : '';
   const cards = opponents.map(p => cardHtml(p, selfTeam && p.team === selfTeam)).join('');
-  $players.innerHTML = selfHtml + cards;
+  const buildCard = showBuild ? buildAdviceCardHtml(opponents[0]) : '';
+  $players.innerHTML = selfHtml + cards + buildCard;
+
+  if (isNewFocus) startAutoFocus(matchKey, oppKey);
 }
 
 function upsertPlayer(player) {
@@ -849,8 +1038,10 @@ function upsertPlayer(player) {
   const self = getSelf(currentSnap);
   const isAlly = self && self.team && player.team === self.team;
   if (player.isSelf) {
-    const old = document.querySelector('.selfbar');
-    const html = renderSelfBar(player);
+    if (!S('selfBar')) return;
+    const id = playerKey(player);
+    const old = document.getElementById(id);
+    const html = cardHtml(player, false);
     if (old) old.outerHTML = html;
     else $players.insertAdjacentHTML('afterbegin', html);
     return;
@@ -864,19 +1055,19 @@ function upsertPlayer(player) {
 
 function relTime(iso) {
   if (!iso) return '';
-  const t = new Date(iso).getTime();
-  if (!Number.isFinite(t)) return '';
-  const diff = Date.now() - t;
+  const ts = new Date(iso).getTime(); // not `t` — that shadows the i18n fn
+  if (!Number.isFinite(ts)) return '';
+  const diff = Date.now() - ts;
   const m = Math.round(diff / 60000);
-  if (m < 1) return 'just now';
-  if (m < 60) return `${m}m ago`;
+  if (m < 1) return t('time_just_now');
+  if (m < 60) return t('time_min_ago', { n: m });
   const h = Math.round(m / 60);
-  if (h < 24) return `${h}h ago`;
+  if (h < 24) return t('time_hr_ago', { n: h });
   const d = Math.round(h / 24);
-  if (d === 1) return 'yesterday';
-  if (d < 30) return `${d}d ago`;
+  if (d === 1) return t('time_yesterday');
+  if (d < 30) return t('time_day_ago', { n: d });
   const mo = Math.round(d / 30);
-  return `${mo}mo ago`;
+  return t('time_mo_ago', { n: mo });
 }
 
 function titleCase(s) {
@@ -946,8 +1137,24 @@ window.api.onMatchPartial((partial) => {
       if (partial.player.isSelf) currentSnap.self = partial.player;
     }
     upsertPlayer(partial.player);
+    refreshBuildCard();
   }
 });
+
+// Insert / update / remove the standalone 1v1 build-advice card in place,
+// without a full re-render (so it tracks opponent enrichment as it arrives).
+function refreshBuildCard() {
+  const opps = (currentSnap?.players || []).filter(p => !p.isSelf);
+  const show1v1 = !!(currentMatchFormat && currentMatchFormat.startsWith('1v1'));
+  const selfCiv = getSelf(currentSnap)?.civ || currentMatchSelfCiv;
+  const existing = document.getElementById('build-advice-card');
+  const ok = show1v1 && S('buildAdvice') && opps.length === 1 && opps[0].civ && selfCiv;
+  if (!ok) { if (existing) existing.remove(); return; }
+  const html = buildAdviceCardHtml(opps[0]);
+  if (!html) { if (existing) existing.remove(); return; }
+  if (existing) existing.outerHTML = html;
+  else $players.insertAdjacentHTML('beforeend', html);
+}
 
 document.addEventListener('click', (e) => {
   const a = e.target.closest('a[href]');
@@ -956,6 +1163,35 @@ document.addEventListener('click', (e) => {
   if (!/^https?:\/\//i.test(href)) return;
   e.preventDefault();
   window.api.openExternal(href);
+});
+
+// Click a card's name row to collapse/expand. Self toggles selfExpanded; the
+// build card has no body collapse; opponents/allies use collapsedCards (keyed
+// by playerKey === card.id, surviving per-player upsert re-renders).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('a[href]')) return;
+  const nameRow = e.target.closest('.card .name');
+  if (!nameRow) return;
+  const card = nameRow.closest('.card');
+  if (!card || !card.id) return;
+  cancelAutoFocus(); // any manual card toggle cancels the new-match auto-focus
+  if (card.classList.contains('card-build')) {
+    planCollapsed = !planCollapsed;
+    card.classList.toggle('collapsed', planCollapsed);
+    const caret = nameRow.querySelector('.card-caret');
+    if (caret) caret.innerHTML = planCollapsed ? '&#9656;' : '&#9662;';
+    return;
+  }
+  if (card.classList.contains('card-self')) {
+    selfExpanded = !selfExpanded;
+    if (currentSnap) renderPlayers(currentSnap);
+    return;
+  }
+  if (collapsedCards.has(card.id)) collapsedCards.delete(card.id);
+  else collapsedCards.add(card.id);
+  const nowCollapsed = card.classList.toggle('collapsed');
+  const caret = nameRow.querySelector('.card-caret');
+  if (caret) caret.innerHTML = nowCollapsed ? '&#9656;' : '&#9662;';
 });
 
 function updatePostMatchCard(snap) {
@@ -980,83 +1216,8 @@ function updatePostMatchCard(snap) {
   }
 }
 
-let currentMode = 'full';
-window.api.onMode((m) => {
-  const prev = currentMode;
-  currentMode = m;
-  document.body.classList.toggle('compact', m === 'compact');
-  if (m === 'compact') {
-    startCompactObserver();
-    scheduleCompactResize();
-  } else {
-    stopCompactObserver();
-    lastCompactH = 0;
-  }
-  // Force re-render when mode changes so cards use mode-specific settings
-  // and any DOM bits hidden in the previous mode reappear cleanly.
-  if (prev !== m) {
-    const opps = (currentSnap?.players || []).filter(p => !p.isSelf);
-    window.log?.info?.('mode-change', `[LOCAL] ${prev} → ${m} · re-render with ${opps.length} opps · snap=${currentSnap ? 'present' : 'null'}`);
-    if (opps.length) {
-      setTimeout(() => renderPlayers(currentSnap), 0);
-    }
-  }
-});
-
-// Auto-resize disabled — too fragile. Cards mutate during enrichment and the
-// resize observer feedback-looped. Compact mode now uses a fixed size with
-// internal scroll for overflow. User can manually drag-resize if they want.
-function scheduleCompactResize() {}
-function startCompactObserver() {}
-function stopCompactObserver() {}
-
-// Shrink countdown — backend emits secs remaining; 0 = cancelled/done.
-let countdownRemain = 0;
-let countdownTickTimer = null;
-if (window.__TAURI__?.event) {
-  window.__TAURI__.event.listen('shrink-countdown', (e) => {
-    countdownRemain = Number(e.payload) || 0;
-    renderShrinkCountdown();
-    clearInterval(countdownTickTimer);
-    if (countdownRemain > 0) {
-      countdownTickTimer = setInterval(() => {
-        countdownRemain = Math.max(0, countdownRemain - 1);
-        renderShrinkCountdown();
-        if (countdownRemain === 0) clearInterval(countdownTickTimer);
-      }, 1000);
-    }
-  });
-}
-function renderShrinkCountdown() {
-  let el = document.getElementById('shrinkCountdown');
-  if (countdownRemain <= 0) {
-    if (el) el.remove();
-    return;
-  }
-  if (!el) {
-    el = document.createElement('div');
-    el.id = 'shrinkCountdown';
-    el.className = 'shrink-countdown';
-    el.title = 'Click to keep full';
-    el.onclick = () => {
-      window.api.setMode('full');
-      countdownRemain = 0;
-      clearInterval(countdownTickTimer);
-      renderShrinkCountdown();
-    };
-    // Insert above the footers so it sits between players list and attrib bar.
-    const app = document.getElementById('app');
-    const attrib = app.querySelector('.attrib');
-    if (attrib) app.insertBefore(el, attrib);
-    else app.appendChild(el);
-  }
-  el.textContent = `Shrinking to compact in ${countdownRemain}s · click to keep full`;
-}
-
 const bind = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
 bind('refresh', refresh);
-bind('expand', () => window.api.setMode('full'));
-bind('collapse', () => window.api.setMode('compact'));
 bind('quit', () => window.api.quit());
 
 (function setupHelp() {
@@ -1079,6 +1240,14 @@ const openLogLink = document.getElementById('openLogLink');
 if (openLogLink) openLogLink.onclick = e => { e.preventDefault(); window.api.openLogFolder(); };
 window.api.onRefresh(refresh);
 
+// Fetch RM ladder sizes once for rank percentiles; re-render if a match is up.
+window.api.leaderboardTotals?.().then(tot => {
+  if (tot && typeof tot === 'object') {
+    ladderTotals = { rm_1v1: tot.rm_1v1 ?? null, rm_team: tot.rm_team ?? null };
+    if (currentSnap?.players?.length) renderPlayers(currentSnap);
+  }
+}).catch(e => window.log?.warn?.('ladder-totals', `[LOCAL] fetch failed: ${e}`));
+
 // --- Settings modal ---
 (function setupSettings() {
   const modal = document.getElementById('settingsModal');
@@ -1089,16 +1258,24 @@ window.api.onRefresh(refresh);
   if (!modal || !body) return;
 
   function renderTable() {
-    body.innerHTML = SETTING_SECTIONS.map(s => `
+    const buildOff = !settings.full.buildAdvice;
+    body.innerHTML = SETTING_SECTIONS.map(s => {
+      const checked = s.key === 'postMatchCard' ? settings.postMatchCard : settings.full[s.key];
+      let row = `
       <tr>
         <td>${t(s.labelKey)}</td>
-        <td><input type="checkbox" data-mode="full" data-key="${s.key}" ${settings.full[s.key] ? 'checked' : ''}></td>
-        <td><input type="checkbox" data-mode="compact" data-key="${s.key}" ${settings.compact[s.key] ? 'checked' : ''}></td>
-      </tr>
-    `).join('');
-    document.querySelectorAll('input[data-other="postMatchCard"]').forEach(el => {
-      el.checked = !!settings.postMatchCard;
-    });
+        <td><input type="checkbox" data-key="${s.key}" ${checked ? 'checked' : ''}></td>
+      </tr>`;
+      // Indent the build-advice part toggles directly under their master row.
+      if (s.key === 'buildAdvice') {
+        row += BUILD_PARTS.map(p => `
+      <tr class="settings-subrow${buildOff ? ' is-disabled' : ''}">
+        <td>${t(p.labelKey)}</td>
+        <td><input type="checkbox" data-buildpart="${p.key}" ${BP(p.key) ? 'checked' : ''} ${buildOff ? 'disabled' : ''}></td>
+      </tr>`).join('');
+      }
+      return row;
+    }).join('');
     // Apply translated labels every time the modal opens (so it reflects
     // current language even after a change).
     applyI18nToSettings();
@@ -1109,13 +1286,12 @@ window.api.onRefresh(refresh);
     const setText = (id, key) => { const el = document.getElementById(id); if (el) el.textContent = t(key); };
     setText('settingsTitle', 'settings_title');
     setText('settingsHdrSection', 'settings_section');
-    setText('settingsHdrFull', 'settings_full');
-    setText('settingsHdrCompact', 'settings_compact');
     setText('settingsHdrLang', 'settings_language');
     setText('settingsHdrOther', 'settings_other');
     setText('settingsLangLabel', 'settings_language');
     const reset = document.getElementById('settingsReset');
     if (reset) reset.textContent = t('settings_reset');
+    setText('settingsDone', 'settings_done');
   }
 
   function renderLangSelect() {
@@ -1136,11 +1312,17 @@ window.api.onRefresh(refresh);
   body.addEventListener('change', (e) => {
     const el = e.target;
     if (el.tagName !== 'INPUT') return;
-    const mode = el.dataset.mode;
     const key = el.dataset.key;
-    if (!mode || !key) return;
-    settings[mode][key] = el.checked;
+    if (!key) return;
+    if (key === 'postMatchCard') {
+      settings.postMatchCard = el.checked;
+      saveSettings();
+      updatePostMatchCard(currentSnap);
+      return;
+    }
+    settings.full[key] = el.checked;
     saveSettings();
+    if (key === 'buildAdvice') renderTable(); // refresh sub-row enabled state
     rerenderForSettings();
   });
   modal.addEventListener('change', (e) => {
@@ -1149,18 +1331,80 @@ window.api.onRefresh(refresh);
       settings.postMatchCard = el.checked;
       saveSettings();
       updatePostMatchCard(currentSnap);
+    } else if (el.dataset?.buildpart) {
+      settings.buildParts[el.dataset.buildpart] = el.checked;
+      saveSettings();
+      refreshBuildCard();
     }
   });
 
   function rerenderForSettings() {
     if (currentSnap?.players?.length) renderPlayers(currentSnap);
-    scheduleCompactResize();
   }
 
-  function open() { renderTable(); modal.removeAttribute('hidden'); }
+  // --- Appearance controls (opacity slider + desktop-window toggle) ---
+  const RECO_ALPHA = 30;  // recommended/default = light tint, still see-through
+  const opacitySlider = document.getElementById('opacitySlider');
+  const opacityValue = document.getElementById('opacityValue');
+  const opacityReco = document.getElementById('opacityReco');
+  const desktopCheck = document.getElementById('setDesktopWindow');
+  const telemetryCheck = document.getElementById('setTelemetry');
+
+  // Park the reco marker over the slider track at the recommended value.
+  if (opacityReco) opacityReco.style.left = `${RECO_ALPHA}%`;
+
+  function syncAppearanceUI() {
+    if (opacitySlider) opacitySlider.value = String(settings.bgAlpha ?? 0);
+    if (opacityValue) {
+      const v = settings.bgAlpha ?? 0;
+      opacityValue.textContent = v === RECO_ALPHA ? `${v}% (reco)` : `${v}%`;
+      opacityValue.classList.toggle('is-reco', v === RECO_ALPHA);
+    }
+    if (opacityReco) opacityReco.classList.toggle('snapped', (settings.bgAlpha ?? 0) === RECO_ALPHA);
+    if (desktopCheck) desktopCheck.checked = !!settings.desktopWindow;
+    if (telemetryCheck) telemetryCheck.checked = settings.telemetry !== false;
+  }
+
+  if (opacitySlider) {
+    opacitySlider.addEventListener('input', () => {
+      settings.bgAlpha = parseInt(opacitySlider.value, 10) || 0;
+      applyAppearance();
+      syncAppearanceUI();
+    });
+    opacitySlider.addEventListener('change', saveSettings);
+  }
+  // Click the green reco marker to jump back to the recommended/default value.
+  if (opacityReco) {
+    opacityReco.addEventListener('click', () => {
+      settings.bgAlpha = RECO_ALPHA;
+      if (opacitySlider) opacitySlider.value = String(RECO_ALPHA);
+      applyAppearance();
+      syncAppearanceUI();
+      saveSettings();
+    });
+  }
+  if (desktopCheck) {
+    desktopCheck.addEventListener('change', () => {
+      settings.desktopWindow = desktopCheck.checked;
+      saveSettings();
+      try { window.api.desktopWindow?.(desktopCheck.checked); } catch (e) {}
+    });
+  }
+  if (telemetryCheck) {
+    // Opt-out toggle; takes effect on next boot ping. Off → app talks to GitHub
+    // directly and the Worker never sees this install.
+    telemetryCheck.addEventListener('change', () => {
+      settings.telemetry = telemetryCheck.checked;
+      saveSettings();
+    });
+  }
+
+  function open() { renderTable(); syncAppearanceUI(); modal.removeAttribute('hidden'); }
   function close() { modal.setAttribute('hidden', ''); }
+  const doneBtn = document.getElementById('settingsDone');
   if (openBtn) openBtn.onclick = open;
   if (closeBtn) closeBtn.onclick = close;
+  if (doneBtn) doneBtn.onclick = close;
   modal.addEventListener('click', e => { if (e.target === modal) close(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !modal.hasAttribute('hidden')) close(); });
   if (resetBtn) resetBtn.onclick = () => {
@@ -1171,7 +1415,6 @@ window.api.onRefresh(refresh);
   };
 })();
 
-// Mode-change re-render handled in the single onMode handler above.
 
 // Translate static HTML elements that aren't re-rendered per snap.
 function applyStaticI18n() {
@@ -1197,17 +1440,38 @@ function applyStaticI18n() {
   setText('#helpIssueSteam', 'help_issues_steam');
   setText('#settingsHelpText', 'settings_help');
   // Help modal headers
-  const helpHeaders = document.querySelectorAll('.help-card h3');
-  // Order: Hotkeys, Log file, Links, Common issues
-  if (helpHeaders[0]) helpHeaders[0].textContent = t('help_hotkeys');
-  if (helpHeaders[1]) helpHeaders[1].textContent = t('help_log');
-  if (helpHeaders[2]) helpHeaders[2].textContent = t('help_links');
-  if (helpHeaders[3]) helpHeaders[3].textContent = t('help_issues');
+  // Help-modal section headers — id-based (index-based broke when Credits was added).
+  setText('#helpHdrHotkeys', 'help_hotkeys');
+  setText('#helpHdrLog', 'help_log');
+  setText('#helpHdrLinks', 'help_links');
+  setText('#helpHdrCredits', 'help_credits');
+  setText('#helpHdrIssues', 'help_issues');
   const openLogBtn = document.getElementById('helpOpenLog');
   if (openLogBtn) openLogBtn.textContent = t('help_open_log');
-  // Settings panel "post-match" label
-  const postLbl = document.getElementById('settingsPostMatchLabel');
-  if (postLbl) postLbl.textContent = t('settings_postmatch') !== 'settings_postmatch' ? t('settings_postmatch') : postLbl.textContent;
+  // Help-modal body text + link labels + credits.
+  setText('#helpMit', 'mit_licensed');
+  setText('#hkRefresh', 'hotkey_refresh');
+  setText('#hkClick', 'hotkey_clickthrough');
+  setText('#lnkProject', 'link_project');
+  setText('#lnkSource', 'link_source');
+  setText('#lnkSourceMit', 'mit_licensed');
+  setText('#lnkContact', 'link_contact');
+  setText('#creditsStats', 'credits_stats');
+  setText('#creditsAge', 'credits_age');
+  setText('#creditsMicrosoft', 'credits_microsoft');
+  // Header + appearance controls.
+  setText('#settingsHelpText', 'settings_help');
+  setText('#settingsHdrAppearance', 'settings_appearance');
+  setText('#appearanceBg', 'appearance_bg');
+  setText('#appearanceDesktop', 'appearance_desktop');
+  setText('#appearanceTelemetry', 'appearance_telemetry');
+  // Header button tooltips (title attribute, not text).
+  const setTitle = (id, key) => { const el = document.getElementById(id); if (el) el.title = t(key); };
+  setTitle('settings', 'title_settings');
+  setTitle('help', 'title_help');
+  setTitle('quit', 'title_quit');
+  setTitle('updateClose', 'title_dismiss');
+  setTitle('openLogLink', 'title_open_log');
 }
 applyStaticI18n();
 
@@ -1228,37 +1492,75 @@ function semverCmp(a, b) {
   return 0;
 }
 
+// Set this to your deployed Cloudflare Worker URL (see telemetry/README.md) to
+// enable the anonymous install-count ping. Empty string = always use GitHub
+// directly (no telemetry), regardless of the settings toggle — safe default
+// until the Worker is deployed.
+const TELEMETRY_URL = 'https://insta-scout-telemetry.aoe2-insta-scout.workers.dev';
+
+// Random per-install id (anonymous; NOT steam id / profile). Created once and
+// persisted; only ever sent when telemetry is enabled.
+function installId() {
+  let id = localStorage.getItem('installId');
+  if (!id) {
+    id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+      : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
+    localStorage.setItem('installId', id);
+  }
+  return id;
+}
+
+const GH_LATEST_URL = 'https://api.github.com/repos/aliencoded/aoe2-stats-overlay-rust/releases/latest';
+const GH_RELEASES_URL = 'https://github.com/aliencoded/aoe2-stats-overlay-rust/releases/latest';
+
 async function checkForUpdate(currentVersion) {
   // Suppress for 6h after user dismisses a specific version banner.
   const dismissed = JSON.parse(localStorage.getItem('updateDismissed') || '{}');
+  // Telemetry ON + Worker configured → ping the Worker (logs install + returns
+  // latest). Otherwise → GitHub directly, sending nothing about this install.
+  const useTelemetry = settings.telemetry !== false && !!TELEMETRY_URL;
+  let latest = '';
+  let htmlUrl = '';
   try {
-    window.log.info('update-check', '[WEB] GET api.github.com/repos/aliencoded/aoe2-stats-overlay-rust/releases/latest');
-    const r = await fetch('https://api.github.com/repos/aliencoded/aoe2-stats-overlay-rust/releases/latest', {
-      headers: { 'Accept': 'application/vnd.github+json' },
-    });
-    if (!r.ok) return;
-    const data = await r.json();
-    const latest = (data.tag_name || '').replace(/^v/, '');
-    if (!latest) return;
-    if (semverCmp(latest, currentVersion) <= 0) return;
-    if (dismissed[latest] && Date.now() - dismissed[latest] < 6 * 60 * 60 * 1000) return;
-
-    const banner = document.getElementById('updateBanner');
-    const text = banner.querySelector('.update-text');
-    const link = document.getElementById('updateLink');
-    const close = document.getElementById('updateClose');
-    text.textContent = t('update_available', { latest, current: currentVersion });
-    link.textContent = t('download');
-    link.href = data.html_url || `https://github.com/aliencoded/aoe2-stats-overlay-rust/releases/latest`;
-    close.onclick = () => {
-      banner.setAttribute('hidden', '');
-      dismissed[latest] = Date.now();
-      localStorage.setItem('updateDismissed', JSON.stringify(dismissed));
-    };
-    banner.removeAttribute('hidden');
+    if (useTelemetry) {
+      window.log.info('update-check', `[WEB] POST ${TELEMETRY_URL}/check`);
+      const r = await fetch(`${TELEMETRY_URL}/check`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: installId(), v: currentVersion, os: 'win' }),
+      });
+      if (r.ok) latest = ((await r.json()).latest || '').replace(/^v/, '');
+    } else {
+      window.log.info('update-check', '[WEB] GET api.github.com/repos/aliencoded/aoe2-stats-overlay-rust/releases/latest');
+      const r = await fetch(GH_LATEST_URL, { headers: { 'Accept': 'application/vnd.github+json' } });
+      if (r.ok) {
+        const data = await r.json();
+        latest = (data.tag_name || '').replace(/^v/, '');
+        htmlUrl = data.html_url || '';
+      }
+    }
   } catch (e) {
-    window.log.warn('update-check', `[WEB] GitHub API unreachable: ${e?.message || e}`);
+    window.log.warn('update-check', `[WEB] update-check unreachable: ${e?.message || e}`);
+    return;
   }
+
+  if (!latest) return;
+  if (semverCmp(latest, currentVersion) <= 0) return;
+  if (dismissed[latest] && Date.now() - dismissed[latest] < 6 * 60 * 60 * 1000) return;
+
+  const banner = document.getElementById('updateBanner');
+  const text = banner.querySelector('.update-text');
+  const link = document.getElementById('updateLink');
+  const close = document.getElementById('updateClose');
+  text.textContent = t('update_available', { latest, current: currentVersion });
+  link.textContent = t('download');
+  link.href = htmlUrl || GH_RELEASES_URL;
+  close.onclick = () => {
+    banner.setAttribute('hidden', '');
+    dismissed[latest] = Date.now();
+    localStorage.setItem('updateDismissed', JSON.stringify(dismissed));
+  };
+  banner.removeAttribute('hidden');
 }
 
 // Idle = hunting for a new match. Heaviest by far (always-on).

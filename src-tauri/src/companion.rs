@@ -130,7 +130,12 @@ static RE_MAP: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)playing on\s+(.+?)$")
 static RE_VS: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\s+vs\s+").unwrap());
 static RE_PLAYING_ON: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\s+playing on\s+.*$").unwrap());
 static RE_PLAYER: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"([A-Za-z0-9_.\-\[\]| ]{2,32}?)\s*\((\d{3,4})\)\s*as\s+([A-Za-z' ]+?)(?:\s*\+|\s*$)")
+    // Name class is Unicode-aware: \p{L}\p{N}\p{M} accept non-Latin names (e.g.
+    // CJK "惠惠神獸"). Emoji/flag prefixes are \p{So} so they stay excluded and
+    // get skipped. Civ stays ASCII (nightbot returns English civ names). Without
+    // this, a non-Latin opponent name fails to parse → pseudo cache key has only
+    // self → "skip enrich" → blank card.
+    Regex::new(r"([\p{L}\p{N}\p{M}_.\-\[\]|() ]{2,32}?)\s*\((\d{3,4})\)\s*as\s+([A-Za-z' ]+?)(?:\s*\+|\s*$)")
         .unwrap()
 });
 
@@ -262,42 +267,14 @@ pub async fn fetch_latest_match_by_profile(profile_id: &str) -> Result<Option<Ca
     }))
 }
 
-pub async fn fetch_recent_matches(profile_id: &str, limit: u32) -> Result<Vec<RecentMatch>> {
-    let url = format!("{}/matches?profile_ids={}&limit={}", BASE, profile_id, limit);
+/// Total ranked players on a leaderboard (e.g. "rm_1v1", "rm_team"), used to
+/// turn a rank number into a percentile. Fetches a 1-row page just for `total`.
+pub async fn fetch_leaderboard_total(id: &str) -> Result<i64> {
+    let url = format!("{}/leaderboards/{}", BASE, id);
     let data: Value = get_json(&url).await?;
-    let mut out = vec![];
-    if let Some(matches) = data.get("matches").and_then(|m| m.as_array()) {
-        for m in matches {
-            if let Some(teams) = m.get("teams").and_then(|t| t.as_array()) {
-                for t in teams {
-                    if let Some(players) = t.get("players").and_then(|p| p.as_array()) {
-                        for p in players {
-                            let pid = p.get("profileId").and_then(s_or_num);
-                            if pid.as_deref() != Some(profile_id) {
-                                continue;
-                            }
-                            out.push(RecentMatch {
-                                match_id: m.get("matchId").cloned(),
-                                started: m.get("started").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                map: m
-                                    .get("mapName")
-                                    .and_then(|v| v.as_str())
-                                    .or_else(|| m.get("map").and_then(|v| v.as_str()))
-                                    .map(|s| s.to_string()),
-                                leaderboard: m.get("leaderboard").cloned(),
-                                civ: p.get("civ").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                won: p.get("won").and_then(|v| v.as_bool()),
-                                rating: p.get("rating").and_then(|v| v.as_i64()),
-                                rating_diff: p.get("ratingDiff").and_then(|v| v.as_i64()),
-                                duration: extract_duration(m),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Ok(out)
+    data.get("total")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| anyhow!("no total in leaderboard {}", id))
 }
 
 fn extract_duration(m: &Value) -> Option<i64> {

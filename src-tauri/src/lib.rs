@@ -15,27 +15,23 @@ use tokio::sync::Mutex;
 
 use crate::poller::Poller;
 
-const COMPACT_W: f64 = 380.0;
-const COMPACT_H: f64 = 200.0;  // one line per player: name + civ + ratings
 const FULL_W: f64 = 520.0;
 const FULL_H: f64 = 900.0;
 const TOP_OFFSET: f64 = 110.0;
 const RIGHT_OFFSET: f64 = 20.0;
-const AUTO_SHRINK_SECS: u64 = 120;
 
+// Single full overlay view. Compact/minimize mode was removed — in-game
+// simplification is handled by per-card auto-collapse instead.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Mode {
     Full,
-    Compact,
 }
 
 struct AppState {
     poller: Arc<Poller>,
     log_path: std::path::PathBuf,
     mode: Mutex<Mode>,
-    user_override: Mutex<Option<Mode>>,
     last_match_active: Mutex<bool>,
-    game_ever_seen: Mutex<bool>,
     last_focus_key: Mutex<Option<String>>,
     click_through: Mutex<bool>,
 }
@@ -43,6 +39,21 @@ struct AppState {
 #[tauri::command]
 fn app_version(app: AppHandle) -> String {
     app.package_info().version.to_string()
+}
+
+// Total ranked players per RM ladder, so the UI can show a rank percentile.
+// Ranks shown are always RM 1v1 (id 3) / RM Team (id 4).
+#[tauri::command]
+async fn leaderboard_totals() -> Result<serde_json::Value, String> {
+    let (a, b) = futures::future::join(
+        companion::fetch_leaderboard_total("rm_1v1"),
+        companion::fetch_leaderboard_total("rm_team"),
+    )
+    .await;
+    Ok(serde_json::json!({
+        "rm_1v1": a.ok(),
+        "rm_team": b.ok(),
+    }))
 }
 
 #[tauri::command]
@@ -64,21 +75,6 @@ async fn fetch_match(
     let active = snap.in_match;
     on_match_state_change(app, state.inner().clone(), active).await;
     Ok(serde_json::to_value(&snap).map_err(|e| e.to_string())?)
-}
-
-#[tauri::command]
-async fn set_mode(
-    state: State<'_, Arc<AppState>>,
-    app: AppHandle,
-    mode: String,
-) -> Result<(), String> {
-    let m = if mode == "compact" || mode == "pill" { Mode::Compact } else { Mode::Full };
-    {
-        let mut o = state.user_override.lock().await;
-        *o = Some(m);
-    }
-    apply_mode(&app, state.inner().clone(), m).await;
-    Ok(())
 }
 
 #[tauri::command]
@@ -139,11 +135,26 @@ fn log_msg(level: String, target: Option<String>, message: String) {
     }
 }
 
-// Dynamic resize disabled — compact uses fixed COMPACT_W × COMPACT_H. Kept as
-// a no-op so any cached frontend that still calls this doesn't error.
+// Desktop-window mode: opaque, resizable, decorated, not always-on-top — for
+// running on a dedicated/second monitor. Off restores the overlay (frameless,
+// always-on-top, fixed-size) and re-applies the current mode geometry.
 #[tauri::command]
-async fn resize_compact(_state: State<'_, Arc<AppState>>, _app: AppHandle, _height: f64) -> Result<f64, String> {
-    Ok(0.0)
+async fn desktop_window(on: bool, state: State<'_, Arc<AppState>>, app: AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("main") {
+        if on {
+            let _ = w.set_always_on_top(false);
+            let _ = w.set_resizable(true);
+            let _ = w.set_decorations(true);
+            let _ = w.show();
+        } else {
+            let _ = w.set_decorations(false);
+            let _ = w.set_resizable(false);
+            let _ = w.set_always_on_top(true);
+            let m = *state.mode.lock().await;
+            apply_mode(&app, state.inner().clone(), m).await;
+        }
+    }
+    Ok(())
 }
 
 fn top_right_bounds(w: &WebviewWindow, width: f64, height: f64) -> (LogicalPosition<f64>, LogicalSize<f64>) {
@@ -168,80 +179,35 @@ fn top_right_bounds(w: &WebviewWindow, width: f64, height: f64) -> (LogicalPosit
 
 async fn apply_mode(app: &AppHandle, state: Arc<AppState>, m: Mode) {
     let Some(w) = app.get_webview_window("main") else { return };
-    let (w_, h_) = match m {
-        Mode::Full => (FULL_W, FULL_H),
-        Mode::Compact => (COMPACT_W, COMPACT_H),
-    };
-    let (pos, size) = top_right_bounds(&w, w_, h_);
+    let (pos, size) = top_right_bounds(&w, FULL_W, FULL_H);
     let _ = w.set_size(size);
     let _ = w.set_position(pos);
-    if m == Mode::Full {
-        let _ = w.show();
-    }
-    {
-        let mut mg = state.mode.lock().await;
-        *mg = m;
-    }
-    let label = if m == Mode::Full { "full" } else { "compact" };
-    let _ = app.emit("mode", label);
-    tracing::info!("[LOCAL] mode → {} ({}×{})", label, w_, h_);
+    let _ = w.show();
+    *state.mode.lock().await = m;
+    let _ = app.emit("mode", "full");
+    tracing::info!("[LOCAL] mode → full ({}×{})", FULL_W, FULL_H);
 }
 
 async fn on_match_state_change(app: AppHandle, state: Arc<AppState>, active: bool) {
-    let mut last = state.last_match_active.lock().await;
-    if active && !*last {
-        tracing::info!("[LOCAL] match transition · none → active · expand + shrink to compact in {}s", AUTO_SHRINK_SECS);
-        drop(last);
-        apply_mode(&app, state.clone(), Mode::Full).await;
+    let was = {
+        let mut last = state.last_match_active.lock().await;
+        let prev = *last;
+        *last = active;
+        prev
+    };
+    // Fresh match → raise the overlay so it's visible. No resize: the single
+    // full view stays put; in-game simplification is per-card auto-collapse.
+    if active && !was {
+        tracing::info!("[LOCAL] match transition · none → active · raise window");
         if let Some(w) = app.get_webview_window("main") {
             let _ = w.set_focus();
         }
-        // Tell frontend: countdown started. 0 = cancelled/done.
-        let _ = app.emit("shrink-countdown", AUTO_SHRINK_SECS);
-        let app_c = app.clone();
-        let state_c = state.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(AUTO_SHRINK_SECS)).await;
-            let o = state_c.user_override.lock().await;
-            let cancelled = *o == Some(Mode::Full);
-            drop(o);
-            let _ = app_c.emit("shrink-countdown", 0u64);
-            if !cancelled {
-                tracing::info!("[LOCAL] flash done · compact mode");
-                apply_mode(&app_c, state_c.clone(), Mode::Compact).await;
-            } else {
-                tracing::info!("[LOCAL] flash cancelled by user override · staying full");
-            }
-        });
-        let mut last = state.last_match_active.lock().await;
-        *last = true;
-    } else if !active && *last {
-        tracing::info!("[LOCAL] match transition · active → none");
-        *last = false;
     }
 }
 
-async fn apply_focus_rule(app: AppHandle, state: Arc<AppState>, focus_key: String) {
-    let o = state.user_override.lock().await;
-    if o.is_some() {
-        return;
-    }
-    drop(o);
-    let seen = *state.game_ever_seen.lock().await;
-    if !seen {
-        return;
-    }
-    let m = *state.mode.lock().await;
-    if focus_key == "game" || focus_key == "self" {
-        if m != Mode::Full {
-            tracing::info!("[LOCAL] focus rule → full");
-            apply_mode(&app, state, Mode::Full).await;
-        }
-    } else if m != Mode::Compact {
-        tracing::info!("[LOCAL] focus rule → compact");
-        apply_mode(&app, state, Mode::Compact).await;
-    }
-}
+// Focus-driven mode switching was removed with compact mode. Kept as a no-op so
+// the focus-watcher wiring stays intact.
+async fn apply_focus_rule(_app: AppHandle, _state: Arc<AppState>, _focus_key: String) {}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -282,9 +248,7 @@ pub fn run() {
                 poller,
                 log_path,
                 mode: Mutex::new(Mode::Full),
-                user_override: Mutex::new(None),
                 last_match_active: Mutex::new(false),
-                game_ever_seen: Mutex::new(false),
                 last_focus_key: Mutex::new(None),
                 click_through: Mutex::new(false),
             });
@@ -300,10 +264,8 @@ pub fn run() {
 
             // Global shortcuts
             let gs = app.global_shortcut();
-            let sc_s = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyS);
             let sc_r = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyR);
             let sc_c = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyC);
-            if let Err(e) = gs.register(sc_s) { tracing::warn!("[LOCAL] global shortcut Ctrl+Shift+S failed: {}", e); }
             if let Err(e) = gs.register(sc_r) { tracing::warn!("[LOCAL] global shortcut Ctrl+Shift+R failed: {}", e); }
             if let Err(e) = gs.register(sc_c) { tracing::warn!("[LOCAL] global shortcut Ctrl+Shift+C failed: {}", e); }
 
@@ -382,9 +344,6 @@ pub fn run() {
                         let is_game = win_focus::is_game(&proc_name, &title);
                         let self_pid = std::process::id();
                         let is_self = info.pid == self_pid;
-                        if is_game {
-                            *state_c.game_ever_seen.lock().await = true;
-                        }
                         let key = if is_game { "game" } else if is_self { "self" } else { "other" }.to_string();
                         let mut last = state_c.last_focus_key.lock().await;
                         if last.as_deref() != Some(&key) {
@@ -403,14 +362,14 @@ pub fn run() {
             app_version,
             steam_id,
             fetch_match,
-            set_mode,
             open_external,
             open_log_folder,
             refresh_caches,
             toggle_click_through,
             quit_app,
             log_msg,
-            resize_compact,
+            desktop_window,
+            leaderboard_totals,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -418,16 +377,9 @@ pub fn run() {
 
 async fn handle_shortcut(app: AppHandle, shortcut: Shortcut) {
     let Some(state) = app.try_state::<Arc<AppState>>().map(|s| s.inner().clone()) else { return };
-    let is_s = shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyS);
     let is_r = shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyR);
     let is_c = shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyC);
-    if is_s {
-        let cur = *state.mode.lock().await;
-        let next = if cur == Mode::Full { Mode::Compact } else { Mode::Full };
-        *state.user_override.lock().await = Some(next);
-        apply_mode(&app, state.clone(), next).await;
-        tracing::info!("[LOCAL] hotkey toggle · override={:?}", next);
-    } else if is_r {
+    if is_r {
         state.poller.clear_match_cache().await;
         state.poller.clear_self_cache().await;
         let _ = app.emit("refresh", ());

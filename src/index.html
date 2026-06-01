@@ -14,10 +14,8 @@
       </div>
       <span id="status" class="status">…</span>
       <button id="refresh" title="Ctrl+Shift+R">↻</button>
-      <button id="collapse" title="Collapse to compact view">⤡</button>
-      <button id="expand" title="Expand to full">⤢</button>
-      <button id="settings" title="Settings — pick what to show">⚙</button>
-      <button id="help" title="Help, hotkeys, log location">?</button>
+      <button id="settings" title="Settings">⚙</button>
+      <button id="help" title="Help">?</button>
       <button id="quit" title="Quit">×</button>
     </header>
     <div id="updateBanner" class="update-banner" hidden>
@@ -42,34 +40,39 @@
       · <a href="#" id="openLogLink" title="Open log folder">logs</a>
       · <span id="appVersion" class="appver">v-</span>
     </footer>
-    <footer class="hint" id="hintBar">Ctrl+Shift+S hide · Ctrl+Shift+R refresh · Ctrl+Shift+C click-through</footer>
+    <footer class="hint" id="hintBar">Ctrl+Shift+R refresh · Ctrl+Shift+C click-through</footer>
   </div>
 
   <div id="helpModal" class="help-modal" hidden>
     <div class="help-card">
       <button id="helpClose" class="help-close" aria-label="Close">×</button>
       <h2>AoE2 Insta Scout</h2>
-      <p class="help-version"><span id="helpVersion">v-</span> · MIT licensed</p>
+      <p class="help-version"><span id="helpVersion">v-</span> · <span id="helpMit">MIT licensed</span></p>
 
-      <h3>Hotkeys</h3>
+      <h3 id="helpHdrHotkeys">Hotkeys</h3>
       <ul class="help-keys">
-        <li><kbd>Ctrl+Shift+S</kbd> Toggle full ↔ compact</li>
-        <li><kbd>Ctrl+Shift+R</kbd> Force refresh (clears cache)</li>
-        <li><kbd>Ctrl+Shift+C</kbd> Toggle click-through (lets clicks pass to game)</li>
+        <li><kbd>Ctrl+Shift+R</kbd> <span id="hkRefresh">Force refresh (clears cache)</span></li>
+        <li><kbd>Ctrl+Shift+C</kbd> <span id="hkClick">Toggle click-through (lets clicks pass to game)</span></li>
       </ul>
 
-      <h3>Log file</h3>
+      <h3 id="helpHdrLog">Log file</h3>
       <p class="help-log" id="helpLogIntro">For bug reports, grab the log file and attach it.</p>
       <button id="helpOpenLog" class="help-btn">Open log folder</button>
 
-      <h3>Links</h3>
+      <h3 id="helpHdrLinks">Links</h3>
       <ul class="help-links">
-        <li><a href="https://www.thinkingslightly.com/aoe2-opponent-stats-ui-overlay/" target="_blank" rel="noopener noreferrer">Project page</a></li>
-        <li><a href="https://github.com/aliencoded/aoe2-stats-mod" target="_blank" rel="noopener noreferrer">Source on GitHub</a>. MIT licensed</li>
-        <li><a href="https://www.linkedin.com/in/aliencoded/" target="_blank" rel="noopener noreferrer">Contact developer</a></li>
+        <li><a id="lnkProject" href="https://www.thinkingslightly.com/aoe2-opponent-stats-ui-overlay/" target="_blank" rel="noopener noreferrer">Project page</a></li>
+        <li><a id="lnkSource" href="https://github.com/aliencoded/aoe2-stats-mod" target="_blank" rel="noopener noreferrer">Source on GitHub</a>. <span id="lnkSourceMit">MIT licensed</span></li>
+        <li><a id="lnkContact" href="https://www.linkedin.com/in/aliencoded/" target="_blank" rel="noopener noreferrer">Contact developer</a></li>
       </ul>
 
-      <h3>Common issues</h3>
+      <h3 id="helpHdrCredits">Credits</h3>
+      <ul class="help-links">
+        <li><span id="creditsStats">Stats + icons:</span> <a href="https://www.aoe2companion.com/" target="_blank" rel="noopener noreferrer">aoe2companion</a> · <span id="creditsAge">age icons:</span> <a href="https://github.com/SiegeEngineers/aoe2techtree" target="_blank" rel="noopener noreferrer">aoe2techtree</a></li>
+        <li id="creditsMicrosoft">AoE2DE icons &amp; civ names © Microsoft. Unofficial fan tool, not affiliated with Microsoft.</li>
+      </ul>
+
+      <h3 id="helpHdrIssues">Common issues</h3>
       <ul class="help-issues" id="helpIssuesList">
         <li id="helpIssueLag">Stats took a while to show? Companion API indexing takes 10–30s after a match starts.</li>
         <li id="helpIssueClick">Overlay won't respond to clicks? Click-through is on. Press Ctrl+Shift+C.</li>
@@ -81,11 +84,11 @@
     <div class="help-card settings-card">
       <button id="settingsClose" class="help-close" aria-label="Close">×</button>
       <h2 id="settingsTitle">Display settings</h2>
-      <p class="help-version" id="settingsHelpText">Pick what each opponent card shows in each mode.</p>
+      <p class="help-version" id="settingsHelpText">Pick what the overlay shows and how it looks.</p>
       <div class="settings-table-wrap">
         <table class="settings-table">
           <thead>
-            <tr><th id="settingsHdrSection">Section</th><th id="settingsHdrFull">Full</th><th id="settingsHdrCompact">Compact</th></tr>
+            <tr><th id="settingsHdrSection">Section</th><th id="settingsHdrShow">Show</th></tr>
           </thead>
           <tbody id="settingsBody"></tbody>
         </table>
@@ -94,16 +97,27 @@
       <ul class="settings-other">
         <li><label><span id="settingsLangLabel">Language</span> <select id="langSelect"></select></label></li>
       </ul>
-      <h3 id="settingsHdrOther">Other</h3>
+      <h3 id="settingsHdrAppearance">Appearance</h3>
       <ul class="settings-other">
-        <li><label><input type="checkbox" data-other="postMatchCard"> <span id="settingsPostMatchLabel">Show post-match "support aoe2companion" card</span></label></li>
+        <li><label class="appearance-row"><span id="appearanceBg">Window background</span>
+          <span class="slider-wrap">
+            <input type="range" id="opacitySlider" min="0" max="100" step="1" value="0">
+            <span id="opacityReco" class="slider-reco" title="Recommended 30% · click to reset"></span>
+          </span>
+          <span id="opacityValue" class="opacity-value">0% (reco)</span>
+        </label></li>
+        <li><label><input type="checkbox" id="setDesktopWindow"> <span id="appearanceDesktop">Desktop window — opaque &amp; resizable, for a second monitor</span></label></li>
+        <li><label><input type="checkbox" id="setTelemetry"> <span id="appearanceTelemetry">Send anonymous usage ping (install count only — no account or match data)</span></label></li>
       </ul>
       <div class="settings-actions">
         <button id="settingsReset" class="help-btn">Reset to defaults</button>
+        <button id="settingsDone" class="help-btn primary">Done</button>
+        <!-- titles/labels translated in applyStaticI18n -->
       </div>
     </div>
   </div>
   <script src="i18n.js"></script>
+  <script src="strategy.js"></script>
   <script src="main.js"></script>
 </body>
 </html>

@@ -620,7 +620,7 @@ impl Poller {
                 if !using_fast_path
                     && m.match_id.is_some()
                     && c.match_id.is_none()
-                    && c.snapshot.pseudo_id.as_deref() == Some(&pseudo)
+                    && c.snapshot.pseudo_id.as_deref() == Some(pseudo.as_str())
                 {
                     tracing::info!(target: "cache", "[LOCAL] promote · pseudo → matchId");
                     let mut snap = c.snapshot.clone();
