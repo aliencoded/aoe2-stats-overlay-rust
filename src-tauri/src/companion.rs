@@ -131,11 +131,13 @@ static RE_VS: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\s+vs\s+").unwrap());
 static RE_PLAYING_ON: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\s+playing on\s+.*$").unwrap());
 static RE_PLAYER: Lazy<Regex> = Lazy::new(|| {
     // Name class is Unicode-aware: \p{L}\p{N}\p{M} accept non-Latin names (e.g.
-    // CJK "惠惠神獸"). Emoji/flag prefixes are \p{So} so they stay excluded and
-    // get skipped. Civ stays ASCII (nightbot returns English civ names). Without
-    // this, a non-Latin opponent name fails to parse → pseudo cache key has only
-    // self → "skip enrich" → blank card.
-    Regex::new(r"([\p{L}\p{N}\p{M}_.\-\[\]|() ]{2,32}?)\s*\((\d{3,4})\)\s*as\s+([A-Za-z' ]+?)(?:\s*\+|\s*$)")
+    // CJK "惠惠神獸"). Common gamertag punctuation (~!@#$%^&*=:;,'?) is included
+    // so names like "~斑驳~" parse — without these the surrounding symbols break
+    // the match and the player is dropped. Emoji/flag prefixes are \p{So} so they
+    // stay excluded and get skipped. Civ stays ASCII (nightbot returns English civ
+    // names). Without this, a symbol-wrapped or non-Latin opponent name fails to
+    // parse → pseudo cache key has only self → "skip enrich" → blank card.
+    Regex::new(r"([\p{L}\p{N}\p{M}_.\-\[\]|()~!@#$%^&*=:;,'? ]{2,32}?)\s*\((\d{3,4})\)\s*as\s+([A-Za-z' ]+?)(?:\s*\+|\s*$)")
         .unwrap()
 });
 

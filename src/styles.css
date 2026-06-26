@@ -156,6 +156,10 @@ body { background: rgba(15, 18, 22, 0.35); }
 .help-close:hover { color: #cde; }
 .help-issues li { padding-left: 14px; position: relative; }
 .help-issues li::before { content: "•"; position: absolute; left: 0; color: #8aa0b5; }
+.help-faq { list-style: none; padding: 0; margin: 0; }
+.help-faq li { margin-bottom: 8px; line-height: 1.45; }
+.help-faq li b { display: block; color: #cde; font-size: 12px; margin-bottom: 1px; }
+.help-faq li span { color: #9bb0c4; font-size: 11px; }
 
 .card .profile-links { margin-top: 6px; padding-top: 5px; border-top: 1px dotted #2a3340; font-size: 10px; color: #8aa0b5; text-align: right; letter-spacing: 0.04em; }
 .card .profile-links a { color: #9cc0d8; text-decoration: none; }
@@ -163,6 +167,13 @@ body { background: rgba(15, 18, 22, 0.35); }
 
 
 .empty { color: #678; text-align: center; padding: 24px 12px; }
+.empty.notice { color: #d9b25a; background: rgba(217,178,90,0.08); border: 1px solid rgba(217,178,90,0.25); border-radius: 6px; padding: 10px 12px; margin: 0 0 10px; font-size: 12px; line-height: 1.4; }
+
+/* Current-mode pill in the header. Subtle; click toggles desktop mode. */
+.mode-badge { font-size: 9px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; border: 1px solid transparent; cursor: pointer; line-height: 1.4; white-space: nowrap; background: transparent; }
+.mode-badge.is-overlay { color: #6fcf97; border-color: rgba(111,207,151,0.4); background: rgba(111,207,151,0.1); }
+.mode-badge.is-desktop { color: #6aa6e8; border-color: rgba(106,166,232,0.4); background: rgba(106,166,232,0.1); }
+.mode-badge:hover { filter: brightness(1.2); }
 
 .update-banner {
   display: flex; align-items: center; gap: 8px;

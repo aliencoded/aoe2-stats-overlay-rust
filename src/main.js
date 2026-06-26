@@ -55,6 +55,8 @@ const DEFAULT_SETTINGS = {
   postMatchCard: true,
   bgAlpha: 30,           // window background opacity 0-100 (30 = light tint, reco)
   desktopWindow: false,  // opaque resizable window for a dedicated monitor
+  autoCollapse: true,    // on a new 1v1 match, auto-collapse the opponent card after a delay
+  autoCollapseSecs: 120, // delay before that auto-collapse (seconds)
   telemetry: true,       // anonymous boot ping (install count only); opt-out via settings
   // Which parts of the 1v1 build-advice (PLAN) card to show. All on by default.
   buildParts: { theirPlans: true, yourPlan: true, makeUnits: true, earlyBuild: true, alternates: true, danger: true },
@@ -86,6 +88,8 @@ function loadSettings() {
       postMatchCard: parsed.postMatchCard ?? DEFAULT_SETTINGS.postMatchCard,
       bgAlpha: parsed.bgAlpha ?? DEFAULT_SETTINGS.bgAlpha,
       desktopWindow: parsed.desktopWindow ?? DEFAULT_SETTINGS.desktopWindow,
+      autoCollapse: parsed.autoCollapse ?? DEFAULT_SETTINGS.autoCollapse,
+      autoCollapseSecs: parsed.autoCollapseSecs ?? DEFAULT_SETTINGS.autoCollapseSecs,
       telemetry: parsed.telemetry ?? DEFAULT_SETTINGS.telemetry,
       buildParts: { ...DEFAULT_SETTINGS.buildParts, ...(parsed.buildParts || {}) },
     };
@@ -108,6 +112,33 @@ function applyAppearance() {
 // Boot: apply persisted appearance + restore desktop-window mode if it was on.
 applyAppearance();
 if (settings.desktopWindow) { try { window.api.desktopWindow?.(true); } catch (e) {} }
+
+// Header pill showing which mode is active. Overlay = always-on-top in-game;
+// Desktop = opaque resizable second-monitor window (not on top, by design).
+function updateModeBadge() {
+  const b = document.getElementById('modeBadge');
+  if (!b) return;
+  const desk = !!settings.desktopWindow;
+  b.textContent = desk ? t('mode_desktop') : t('mode_overlay');
+  b.title = desk ? t('mode_desktop_hint') : t('mode_overlay_hint');
+  b.classList.toggle('is-desktop', desk);
+  b.classList.toggle('is-overlay', !desk);
+}
+
+// Single entry point for switching desktop mode, shared by the header pill and
+// the settings checkbox so both stay in sync.
+function setDesktopMode(on) {
+  settings.desktopWindow = on;
+  saveSettings();
+  if (on) cancelAutoFocus();   // desktop mode never auto-collapses
+  selfExpanded = on;           // expand self card when there's room
+  try { window.api.desktopWindow?.(on); } catch (e) {}
+  const chk = document.getElementById('setDesktopWindow');
+  if (chk) chk.checked = on;
+  updateModeBadge();
+  if (currentSnap) renderPlayers(currentSnap);
+}
+document.getElementById('modeBadge')?.addEventListener('click', () => setDesktopMode(!settings.desktopWindow));
 function S(key) {
   // True if a card section is enabled (single full overlay view).
   return !!settings.full?.[key];
@@ -122,15 +153,20 @@ let timer = null;
 let countdownTimer = null;
 let nextRefreshAt = 0;
 let baseStatus = '';
-let selfExpanded = false; // click the self bar to expand a full self card
+// Self card defaults collapsed to a one-line header in the cramped overlay, but
+// auto-expands in desktop-window mode where there's room. User can still toggle.
+let selfExpanded = !!settings.desktopWindow;
 let planCollapsed = false; // 1v1 build-advice (PLAN) card collapse state
 const collapsedCards = new Set(); // playerKey() of opponent/ally cards collapsed to header-only
 
 // New-match auto-focus: on a new 1v1 match keep the opponent card + PLAN card
-// expanded for AUTO_FOCUS_SECS (with a visible countdown), then collapse the
+// expanded for autoFocusSecs() (with a visible countdown), then collapse the
 // opponent card so the build order becomes the focus. Cancelled the moment the
 // user manually toggles any card.
-const AUTO_FOCUS_SECS = 120;
+function autoFocusSecs() {
+  const n = Number(settings.autoCollapseSecs);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : 120;
+}
 let autoFocusMatchKey = null;
 let autoFocusOppKey = null;
 let autoFocusTimer = null;
@@ -141,14 +177,15 @@ function startAutoFocus(matchKey, oppKey) {
   stopAutoFocusTimers();
   autoFocusMatchKey = matchKey;
   autoFocusOppKey = oppKey;
-  autoFocusRemain = AUTO_FOCUS_SECS;
+  const secs = autoFocusSecs();
+  autoFocusRemain = secs;
   renderAutoFocusCountdown();
   autoFocusTick = setInterval(() => {
     autoFocusRemain = Math.max(0, autoFocusRemain - 1);
     renderAutoFocusCountdown();
     if (autoFocusRemain === 0) { clearInterval(autoFocusTick); autoFocusTick = null; }
   }, 1000);
-  autoFocusTimer = setTimeout(collapseOppNow, AUTO_FOCUS_SECS * 1000);
+  autoFocusTimer = setTimeout(collapseOppNow, secs * 1000);
 }
 function collapseOppNow() {
   if (autoFocusOppKey) {
@@ -1006,7 +1043,20 @@ function renderPlayers(snap) {
     if (first?.leaderboard) { currentMatchFormat = leaderboardShort(first.leaderboard); break; }
   }
 
-  if (!opponents.length) { renderEmpty(t('empty_no_opps')); return; }
+  if (!opponents.length) {
+    // A match resolved but no opponent surfaced — usually the live-text parser
+    // choked on an unusual name. Don't blank the whole app: still show self plus
+    // an explicit notice so the user sees their own data and knows why the
+    // opponent is missing (vs. a silent total failure).
+    if (self && S('selfBar')) {
+      $players.innerHTML =
+        `<div class="empty notice">${escapeHtml(t('opp_parse_fail'))}</div>` +
+        cardHtml(self, false);
+    } else {
+      renderEmpty(t('empty_no_opps'));
+    }
+    return;
+  }
 
   const selfTeam = self?.team || null;
   const show1v1 = !!(currentMatchFormat && currentMatchFormat.startsWith('1v1'));
@@ -1017,7 +1067,10 @@ function renderPlayers(snap) {
   // the opponent after a visible countdown so the build order is the focus.
   const matchKey = snap?.matchId || snap?.pseudoId || null;
   const oppKey = (showBuild && opponents.length === 1) ? playerKey(opponents[0]) : null;
-  const isNewFocus = showBuild && matchKey && matchKey !== autoFocusMatchKey;
+  // Auto-collapse is opt-out via settings; also always off in desktop-window
+  // mode (dedicated second monitor) where the overlay isn't covering the game.
+  const autoCollapseOn = settings.autoCollapse && !settings.desktopWindow;
+  const isNewFocus = autoCollapseOn && showBuild && matchKey && matchKey !== autoFocusMatchKey;
   if (isNewFocus) {
     planCollapsed = false;
     if (oppKey) collapsedCards.delete(oppKey); // ensure opponent starts expanded
@@ -1348,6 +1401,9 @@ window.api.leaderboardTotals?.().then(tot => {
   const opacityValue = document.getElementById('opacityValue');
   const opacityReco = document.getElementById('opacityReco');
   const desktopCheck = document.getElementById('setDesktopWindow');
+  const autoCollapseCheck = document.getElementById('setAutoCollapse');
+  const autoCollapseSlider = document.getElementById('autoCollapseSlider');
+  const autoCollapseValue = document.getElementById('autoCollapseValue');
   const telemetryCheck = document.getElementById('setTelemetry');
 
   // Park the reco marker over the slider track at the recommended value.
@@ -1362,7 +1418,11 @@ window.api.leaderboardTotals?.().then(tot => {
     }
     if (opacityReco) opacityReco.classList.toggle('snapped', (settings.bgAlpha ?? 0) === RECO_ALPHA);
     if (desktopCheck) desktopCheck.checked = !!settings.desktopWindow;
-    if (telemetryCheck) telemetryCheck.checked = settings.telemetry !== false;
+    if (autoCollapseCheck) autoCollapseCheck.checked = settings.autoCollapse !== false;
+    if (autoCollapseSlider) autoCollapseSlider.value = String(settings.autoCollapseSecs ?? 120);
+    if (autoCollapseValue) autoCollapseValue.textContent = `${settings.autoCollapseSecs ?? 120}s`;
+    // Delay slider only matters when auto-collapse is on.
+    if (autoCollapseSlider) autoCollapseSlider.disabled = settings.autoCollapse === false;
   }
 
   if (opacitySlider) {
@@ -1384,11 +1444,23 @@ window.api.leaderboardTotals?.().then(tot => {
     });
   }
   if (desktopCheck) {
-    desktopCheck.addEventListener('change', () => {
-      settings.desktopWindow = desktopCheck.checked;
+    desktopCheck.addEventListener('change', () => setDesktopMode(desktopCheck.checked));
+  }
+  if (autoCollapseCheck) {
+    autoCollapseCheck.addEventListener('change', () => {
+      settings.autoCollapse = autoCollapseCheck.checked;
       saveSettings();
-      try { window.api.desktopWindow?.(desktopCheck.checked); } catch (e) {}
+      // Switching off cancels any countdown already running this match.
+      if (!autoCollapseCheck.checked) cancelAutoFocus();
+      syncAppearanceUI();
     });
+  }
+  if (autoCollapseSlider) {
+    autoCollapseSlider.addEventListener('input', () => {
+      settings.autoCollapseSecs = parseInt(autoCollapseSlider.value, 10) || 120;
+      if (autoCollapseValue) autoCollapseValue.textContent = `${settings.autoCollapseSecs}s`;
+    });
+    autoCollapseSlider.addEventListener('change', saveSettings);
   }
   if (telemetryCheck) {
     // Opt-out toggle; takes effect on next boot ping. Off → app talks to GitHub
@@ -1442,6 +1514,19 @@ function applyStaticI18n() {
   // Help modal headers
   // Help-modal section headers — id-based (index-based broke when Credits was added).
   setText('#helpHdrHotkeys', 'help_hotkeys');
+  setText('#helpHdrModes', 'help_modes');
+  setText('#faqOverlayQ', 'faq_overlay_q');
+  setText('#faqOverlayA', 'faq_overlay_a');
+  setText('#faqDesktopQ', 'faq_desktop_q');
+  setText('#faqDesktopA', 'faq_desktop_a');
+  setText('#faqSwitchQ', 'faq_switch_q');
+  setText('#faqSwitchA', 'faq_switch_a');
+  setText('#faqTopQ', 'faq_top_q');
+  setText('#faqTopA', 'faq_top_a');
+  setText('#faqSelfQ', 'faq_self_q');
+  setText('#faqSelfA', 'faq_self_a');
+  setText('#faqCollapseQ', 'faq_collapse_q');
+  setText('#faqCollapseA', 'faq_collapse_a');
   setText('#helpHdrLog', 'help_log');
   setText('#helpHdrLinks', 'help_links');
   setText('#helpHdrCredits', 'help_credits');
@@ -1464,6 +1549,8 @@ function applyStaticI18n() {
   setText('#settingsHdrAppearance', 'settings_appearance');
   setText('#appearanceBg', 'appearance_bg');
   setText('#appearanceDesktop', 'appearance_desktop');
+  setText('#appearanceAutoCollapse', 'appearance_auto_collapse');
+  setText('#appearanceAutoCollapseSecs', 'appearance_auto_collapse_secs');
   setText('#appearanceTelemetry', 'appearance_telemetry');
   // Header button tooltips (title attribute, not text).
   const setTitle = (id, key) => { const el = document.getElementById(id); if (el) el.title = t(key); };
@@ -1472,6 +1559,7 @@ function applyStaticI18n() {
   setTitle('quit', 'title_quit');
   setTitle('updateClose', 'title_dismiss');
   setTitle('openLogLink', 'title_open_log');
+  updateModeBadge();
 }
 applyStaticI18n();
 

@@ -1,6 +1,6 @@
 [package]
 name = "aoe2-insta-scout"
-version = "0.3.0"
+version = "0.3.2"
 description = "In-game overlay showing opponent ELO and top civs for AoE2DE"
 authors = ["aliencoded"]
 edition = "2021"

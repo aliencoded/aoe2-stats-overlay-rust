@@ -12,6 +12,7 @@
         <span class="brand-text">INSTA</span>
         <img class="title-icon" src="assets/scout-icon.png" alt="Insta Scout" />
       </div>
+      <button id="modeBadge" class="mode-badge" type="button" title="Click to switch mode">Overlay</button>
       <span id="status" class="status">…</span>
       <button id="refresh" title="Ctrl+Shift+R">↻</button>
       <button id="settings" title="Settings">⚙</button>
@@ -53,6 +54,16 @@
       <ul class="help-keys">
         <li><kbd>Ctrl+Shift+R</kbd> <span id="hkRefresh">Force refresh (clears cache)</span></li>
         <li><kbd>Ctrl+Shift+C</kbd> <span id="hkClick">Toggle click-through (lets clicks pass to game)</span></li>
+      </ul>
+
+      <h3 id="helpHdrModes">Overlay vs desktop mode</h3>
+      <ul class="help-faq" id="helpModesList">
+        <li><b id="faqOverlayQ">Overlay mode (default)</b> <span id="faqOverlayA">Transparent, frameless, always on top. Sits over the game so you can read stats without alt-tabbing. Use Ctrl+Shift+C to let clicks pass through to the game.</span></li>
+        <li><b id="faqDesktopQ">Desktop mode</b> <span id="faqDesktopA">Opaque, resizable, with a normal title bar — and NOT always on top. Made for a second monitor, where it behaves like any regular window you alt-tab to.</span></li>
+        <li><b id="faqSwitchQ">Switching modes</b> <span id="faqSwitchA">Click the mode pill (Overlay / Desktop) in the top-left of the header, or toggle "Desktop window" in Settings.</span></li>
+        <li><b id="faqTopQ">Overlay hidden behind the game?</b> <span id="faqTopA">Set AoE2 to Windowed Fullscreen (borderless) in its video options. True exclusive fullscreen can't be covered by any overlay — a Windows limitation. (In desktop mode it stays behind on purpose.)</span></li>
+        <li><b id="faqSelfQ">Where are my own stats?</b> <span id="faqSelfA">Your own tab is collapsed to a one-line header by default in overlay mode (to save space). Click your name row to expand it. In desktop mode it starts expanded.</span></li>
+        <li><b id="faqCollapseQ">Opponent card collapses by itself?</b> <span id="faqCollapseA">In overlay mode, on a new 1v1 match the opponent card collapses after a countdown so the build order takes focus. (This timer runs only in overlay mode, not desktop.) Turn it off or change the delay in Settings, or click any card header to cancel.</span></li>
       </ul>
 
       <h3 id="helpHdrLog">Log file</h3>
@@ -107,6 +118,13 @@
           <span id="opacityValue" class="opacity-value">0% (reco)</span>
         </label></li>
         <li><label><input type="checkbox" id="setDesktopWindow"> <span id="appearanceDesktop">Desktop window — opaque &amp; resizable, for a second monitor</span></label></li>
+        <li><label><input type="checkbox" id="setAutoCollapse"> <span id="appearanceAutoCollapse">Auto-collapse opponent card after match start</span></label></li>
+        <li><label class="appearance-row"><span id="appearanceAutoCollapseSecs">Collapse delay</span>
+          <span class="slider-wrap">
+            <input type="range" id="autoCollapseSlider" min="10" max="300" step="5" value="120">
+          </span>
+          <span id="autoCollapseValue" class="opacity-value">120s</span>
+        </label></li>
         <li><label><input type="checkbox" id="setTelemetry"> <span id="appearanceTelemetry">Send anonymous usage ping (install count only — no account or match data)</span></label></li>
       </ul>
       <div class="settings-actions">

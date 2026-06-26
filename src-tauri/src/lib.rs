@@ -34,6 +34,9 @@ struct AppState {
     last_match_active: Mutex<bool>,
     last_focus_key: Mutex<Option<String>>,
     click_through: Mutex<bool>,
+    // True while desktop-window mode is on — suppresses the topmost re-assert so
+    // the overlay can sit behind/among normal windows on a second monitor.
+    desktop: Mutex<bool>,
 }
 
 #[tauri::command]
@@ -140,6 +143,7 @@ fn log_msg(level: String, target: Option<String>, message: String) {
 // always-on-top, fixed-size) and re-applies the current mode geometry.
 #[tauri::command]
 async fn desktop_window(on: bool, state: State<'_, Arc<AppState>>, app: AppHandle) -> Result<(), String> {
+    *state.desktop.lock().await = on;
     if let Some(w) = app.get_webview_window("main") {
         if on {
             let _ = w.set_always_on_top(false);
@@ -251,6 +255,7 @@ pub fn run() {
                 last_match_active: Mutex::new(false),
                 last_focus_key: Mutex::new(None),
                 click_through: Mutex::new(false),
+                desktop: Mutex::new(false),
             });
             app.manage(state.clone());
 
@@ -345,6 +350,19 @@ pub fn run() {
                         let self_pid = std::process::id();
                         let is_self = info.pid == self_pid;
                         let key = if is_game { "game" } else if is_self { "self" } else { "other" }.to_string();
+
+                        // While the game is foreground, it keeps re-asserting its
+                        // own topmost z-order and buries the overlay. Re-pin the
+                        // overlay above it every tick (focus-safe, no activation).
+                        // Suppressed in desktop-window mode.
+                        if is_game && !*state_c.desktop.lock().await {
+                            if let Some(w) = app_c.get_webview_window("main") {
+                                if let Ok(h) = w.hwnd() {
+                                    win_focus::reassert_topmost(h.0 as isize);
+                                }
+                            }
+                        }
+
                         let mut last = state_c.last_focus_key.lock().await;
                         if last.as_deref() != Some(&key) {
                             tracing::info!("[LOCAL] focus · proc={} → {}", proc_name, key);
